@@ -15,6 +15,7 @@
       --danger: #b91c1c;
       --muted: #5b6471;
       --text: #1f2430;
+      --columns: 4;
     }
 
     * { box-sizing: border-box; }
@@ -35,11 +36,12 @@
       z-index: 10;
       background: var(--primary);
       color: #fff;
-      padding: 14px 24px;
+      padding: 12px 24px;
       display: flex;
       align-items: center;
       gap: 16px;
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+      flex-wrap: wrap;
     }
 
     header h1 {
@@ -47,6 +49,7 @@
       font-size: 18px;
       font-weight: 600;
       flex: 1;
+      min-width: 160px;
     }
 
     header button {
@@ -64,8 +67,33 @@
       background: rgba(255, 255, 255, 0.25);
     }
 
+    header .col-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    header .col-control label {
+      font-weight: 500;
+    }
+
+    header .col-control input {
+      width: 56px;
+      padding: 4px 6px;
+      border: 1px solid rgba(255, 255, 255, 0.4);
+      background: rgba(255, 255, 255, 0.95);
+      color: var(--text);
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
     main {
-      max-width: 1280px;
+      max-width: 1600px;
       margin: 0 auto;
       padding: 24px;
     }
@@ -96,107 +124,71 @@
     }
 
     .file-header {
-      padding: 16px 20px;
+      padding: 14px 20px;
       display: flex;
-      flex-wrap: wrap;
       gap: 12px;
       align-items: center;
       border-bottom: 1px solid var(--border);
     }
 
-    .file-header .meta {
-      flex: 1;
-      min-width: 240px;
-    }
-
     .file-header h2 {
       margin: 0;
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 600;
       word-break: break-word;
-    }
-
-    .file-header .path {
-      margin-top: 4px;
-      font-size: 12px;
-      color: var(--muted);
-      word-break: break-all;
-      font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo,
-        Consolas, monospace;
+      flex: 1;
     }
 
     .file-header .actions {
       display: flex;
-      gap: 8px;
+      gap: 6px;
+      flex-shrink: 0;
     }
-
-    button.primary {
-      background: var(--primary);
-      color: #fff;
-      border: none;
-      padding: 10px 16px;
-      border-radius: 6px;
-      font-size: 14px;
-      cursor: pointer;
-      transition: background 120ms ease;
-    }
-
-    button.primary:hover { background: var(--primary-dark); }
-    button.primary.copied { background: var(--success); }
 
     button.secondary {
       background: transparent;
       color: var(--primary);
       border: 1px solid var(--primary);
-      padding: 10px 14px;
+      padding: 6px 12px;
       border-radius: 6px;
-      font-size: 14px;
+      font-size: 13px;
       cursor: pointer;
     }
 
     button.secondary:hover { background: rgba(31, 78, 216, 0.08); }
 
-    .command {
-      padding: 0 20px 12px 20px;
-      font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo,
-        Consolas, monospace;
-      font-size: 12px;
-      color: var(--muted);
-      word-break: break-all;
-    }
-
     .pages {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(var(--columns), 1fr);
       gap: 12px;
-      overflow-x: auto;
       padding: 16px 20px 20px 20px;
-      scrollbar-width: thin;
-    }
-
-    .pages::-webkit-scrollbar { height: 10px; }
-    .pages::-webkit-scrollbar-thumb {
-      background: #c5cad3;
-      border-radius: 6px;
     }
 
     .page {
-      flex-shrink: 0;
       border: 2px solid transparent;
       border-radius: 6px;
       background: #fafbfc;
       cursor: pointer;
-      transition: border-color 120ms ease, transform 120ms ease;
+      transition: border-color 120ms ease, transform 120ms ease,
+        box-shadow 120ms ease;
       position: relative;
+      overflow: hidden;
+      aspect-ratio: 1 / 1.414;
     }
 
     .page img {
       display: block;
-      height: 360px;
-      width: auto;
-      border-radius: 4px;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #fff;
     }
 
-    .page:hover { border-color: var(--primary); transform: translateY(-2px); }
+    .page:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 10px rgba(31, 78, 216, 0.15);
+    }
     .page.selected { border-color: var(--success); }
 
     .page-num {
@@ -208,6 +200,7 @@
       font-size: 11px;
       padding: 2px 6px;
       border-radius: 4px;
+      pointer-events: none;
     }
 
     .error {
@@ -232,6 +225,7 @@
       pointer-events: none;
       transition: opacity 180ms ease, transform 180ms ease;
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      z-index: 100;
     }
 
     .toast.show {
@@ -243,6 +237,10 @@
 <body>
   <header>
     <h1>Word Previews</h1>
+    <span class="col-control">
+      <label for="cols">Kolommen</label>
+      <input id="cols" type="number" min="4" max="12" step="1" value="4" />
+    </span>
     <button id="refresh" type="button">Vernieuwen</button>
     <button id="regenerate" type="button">Previews opnieuw genereren</button>
   </header>
@@ -256,7 +254,37 @@
   <script>
     const filesEl = document.getElementById("files");
     const toastEl = document.getElementById("toast");
+    const colsInput = document.getElementById("cols");
     let toastTimer = null;
+
+    const MIN_COLS = 4;
+    const MAX_COLS = 12;
+    const COL_STORAGE_KEY = "wordPreview.columns";
+
+    function clampCols(value) {
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n)) return MIN_COLS;
+      return Math.min(MAX_COLS, Math.max(MIN_COLS, n));
+    }
+
+    function applyColumns(value) {
+      const n = clampCols(value);
+      document.documentElement.style.setProperty("--columns", String(n));
+      colsInput.value = String(n);
+      try { localStorage.setItem(COL_STORAGE_KEY, String(n)); } catch (_) {}
+    }
+
+    const initialCols = (() => {
+      try {
+        const stored = localStorage.getItem(COL_STORAGE_KEY);
+        if (stored) return clampCols(stored);
+      } catch (_) {}
+      return MIN_COLS;
+    })();
+    applyColumns(initialCols);
+
+    colsInput.addEventListener("change", () => applyColumns(colsInput.value));
+    colsInput.addEventListener("input", () => applyColumns(colsInput.value));
 
     function showToast(text) {
       toastEl.textContent = text;
@@ -299,11 +327,10 @@
       wrapper.className = "file";
 
       const command = file.include_command || "";
-      const safeCommand = escapeHtml(command);
       const previewsHtml = (file.previews || [])
         .map(
           (url, idx) => `
-            <div class="page" data-index="${idx}">
+            <div class="page" data-index="${idx}" title="Klik om INCLUDETEXT te kopieren">
               <img src="${escapeHtml(url)}" alt="Pagina ${idx + 1} van ${escapeHtml(file.name)}" loading="lazy" />
               <span class="page-num">${idx + 1}</span>
             </div>`
@@ -312,21 +339,15 @@
 
       wrapper.innerHTML = `
         <div class="file-header">
-          <div class="meta">
-            <h2>${escapeHtml(file.name)}</h2>
-            <div class="path">${escapeHtml(file.path)}</div>
-          </div>
+          <h2>${escapeHtml(file.name)}</h2>
           <div class="actions">
-            <button class="primary" data-action="copy">Kopieer INCLUDETEXT</button>
             <button class="secondary" data-action="regen">Opnieuw genereren</button>
           </div>
         </div>
-        <div class="command" title="Dit komt op je klembord">${safeCommand}</div>
         ${file.error ? `<div class="error">Fout bij genereren: ${escapeHtml(file.error)}</div>` : ""}
         ${previewsHtml ? `<div class="pages">${previewsHtml}</div>` : ""}
       `;
 
-      const copyBtn = wrapper.querySelector('button[data-action="copy"]');
       const regenBtn = wrapper.querySelector('button[data-action="regen"]');
 
       const doCopy = async () => {
@@ -335,20 +356,12 @@
           showToast("Kopieren mislukt");
           return;
         }
-        copyBtn.classList.add("copied");
-        copyBtn.textContent = "Gekopieerd!";
-        showToast("INCLUDETEXT-commando gekopieerd");
-        setTimeout(() => {
-          copyBtn.classList.remove("copied");
-          copyBtn.textContent = "Kopieer INCLUDETEXT";
-        }, 1500);
+        showToast("INCLUDETEXT gekopieerd: " + file.name);
       };
-
-      copyBtn.addEventListener("click", doCopy);
 
       wrapper.querySelectorAll(".page").forEach((page) => {
         page.addEventListener("click", () => {
-          wrapper.querySelectorAll(".page.selected").forEach((p) =>
+          document.querySelectorAll(".page.selected").forEach((p) =>
             p.classList.remove("selected")
           );
           page.classList.add("selected");
@@ -356,7 +369,8 @@
         });
       });
 
-      regenBtn.addEventListener("click", async () => {
+      regenBtn.addEventListener("click", async (event) => {
+        event.stopPropagation();
         regenBtn.disabled = true;
         regenBtn.textContent = "Bezig...";
         try {
