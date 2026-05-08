@@ -147,11 +147,36 @@ def _list_word_files() -> list[Path]:
     )
 
 
+def _cleanup_orphan_previews(active_stems: set[str]) -> list[str]:
+    """Verwijder preview-mappen waarvoor geen .docx-bestand meer bestaat.
+
+    Returnt de lijst stems die zijn opgeruimd (handig voor logging/UI).
+    """
+    removed: list[str] = []
+    if not PREVIEW_DIR.exists():
+        return removed
+    for entry in PREVIEW_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        if entry.name in active_stems:
+            continue
+        try:
+            shutil.rmtree(entry)
+            removed.append(entry.name)
+            logger.info("Preview-map verwijderd voor verdwenen bestand: %s", entry.name)
+        except OSError as exc:  # noqa: BLE001
+            logger.warning("Kon preview-map %s niet verwijderen: %s", entry, exc)
+    return removed
+
+
 @app.get("/api/files")
 def list_files(regenerate: bool = Query(default=False)) -> list[dict[str, Any]]:
     """Return metadata for every .docx-bestand inclusief preview-URLs."""
+    word_files = _list_word_files()
+    _cleanup_orphan_previews({p.stem for p in word_files})
+
     results: list[dict[str, Any]] = []
-    for docx in _list_word_files():
+    for docx in word_files:
         info: dict[str, Any] = {
             "name": docx.name,
             "stem": docx.stem,
