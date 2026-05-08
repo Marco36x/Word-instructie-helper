@@ -255,6 +255,7 @@ class WordPreviewApp(tk.Tk):
         self._task_queue: Queue[tuple[str, object]] = Queue()
         self._render_after_id: str | None = None
         self._last_canvas_width = 0
+        self._selectable_cells: list[tk.Frame] = []
 
         self._configure_style()
         self._build_ui()
@@ -538,6 +539,7 @@ class WordPreviewApp(tk.Tk):
         for widget in self.inner.winfo_children():
             widget.destroy()
         self._photo_refs.clear()
+        self._selectable_cells.clear()
 
         if not self._files:
             placeholder = ttk.Frame(self.inner, padding=24)
@@ -584,18 +586,35 @@ class WordPreviewApp(tk.Tk):
             ).pack(anchor="w", padx=4)
             return
 
-        grid = ttk.Frame(section)
-        grid.pack(fill=tk.X)
-        for c in range(cols):
-            grid.columnconfigure(c, weight=1, uniform="thumbcol")
+        # Container voor alle rijen van dit bestand. We gebruiken tk.Frame
+        # i.p.v. ttk.Frame omdat sommige TTK-themes (vooral op Windows) de
+        # breedte niet goed doorgeven aan een ingebed Canvas-window — dan
+        # ontstaan de cellen pas in volle breedte na een resize.
+        rows_container = tk.Frame(section, bg=self["bg"])
+        rows_container.pack(fill=tk.X)
 
         cmd = _build_include_command(docx)
 
-        for index, png in enumerate(previews):
-            row, col = divmod(index, cols)
-            cell = self._build_thumbnail(grid, png, cmd, docx.name, index + 1,
-                                         thumb_w, thumb_h)
-            cell.grid(row=row, column=col, padx=4, pady=4, sticky="nsew")
+        # Pak previews per rij, gebruik pack(side=LEFT) zodat thumbnails
+        # gegarandeerd naast elkaar staan, ongeacht het Tk-thema.
+        for row_start in range(0, len(previews), cols):
+            row_frame = tk.Frame(rows_container, bg=self["bg"])
+            row_frame.pack(fill=tk.X, pady=2)
+            row_chunk = previews[row_start:row_start + cols]
+            for offset, png in enumerate(row_chunk):
+                cell = self._build_thumbnail(
+                    row_frame, png, cmd, docx.name,
+                    row_start + offset + 1, thumb_w, thumb_h,
+                )
+                cell.pack(side=tk.LEFT, padx=4, pady=2,
+                          fill=tk.NONE, expand=False, anchor="n")
+            # Vul resterende kolommen op met lege placeholders zodat de rij
+            # niet uitlijnt als de laatste rij minder thumbs heeft.
+            for _ in range(cols - len(row_chunk)):
+                spacer = tk.Frame(row_frame, bg=self["bg"],
+                                  width=thumb_w + 12, height=1)
+                spacer.pack_propagate(False)
+                spacer.pack(side=tk.LEFT, padx=4)
 
     def _build_thumbnail(
         self,
@@ -637,11 +656,15 @@ class WordPreviewApp(tk.Tk):
         )
         page_label.pack(pady=(0, 6))
 
+        self._selectable_cells.append(cell)
+
         def on_click(_event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
             self._copy_command(command, docx_name, page_number)
-            for sibling in parent.winfo_children():
-                if isinstance(sibling, tk.Frame):
-                    sibling.configure(highlightbackground="#d8dbe0")
+            for other in self._selectable_cells:
+                try:
+                    other.configure(highlightbackground="#d8dbe0")
+                except tk.TclError:
+                    pass
             cell.configure(highlightbackground="#15803d")
 
         for widget in (cell, label, page_label):
