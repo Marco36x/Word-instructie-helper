@@ -26,7 +26,7 @@ from queue import Empty, Queue
 from typing import Iterable
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
@@ -219,6 +219,26 @@ def _save_columns(value: int) -> None:
     _save_config(config)
 
 
+def _load_names() -> dict[str, str]:
+    raw = _load_config().get("names", {}) or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if isinstance(v, str) and v}
+
+
+def _save_name(stem: str, custom_name: str | None) -> None:
+    config = _load_config()
+    names = config.get("names", {}) or {}
+    if not isinstance(names, dict):
+        names = {}
+    if custom_name:
+        names[stem] = custom_name
+    else:
+        names.pop(stem, None)
+    config["names"] = names
+    _save_config(config)
+
+
 # ---------------------------------------------------------------------------
 # Helper om bestand/folder te openen op het systeem
 # ---------------------------------------------------------------------------
@@ -256,6 +276,10 @@ class WordPreviewApp(tk.Tk):
         self._render_after_id: str | None = None
         self._last_canvas_width = 0
         self._selectable_cells: list[tk.Frame] = []
+        self._names: dict[str, str] = _load_names()
+        self._toast: tk.Toplevel | None = None
+        self._toast_label: tk.Label | None = None
+        self._toast_after_id: str | None = None
 
         self._configure_style()
         self._build_ui()
@@ -571,11 +595,32 @@ class WordPreviewApp(tk.Tk):
 
         header = ttk.Frame(section)
         header.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(header, text=docx.name, style="FileTitle.TLabel").pack(side=tk.LEFT)
+
+        title_box = ttk.Frame(header)
+        title_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        display = self._display_name(docx)
+        ttk.Label(title_box, text=display, style="FileTitle.TLabel").pack(
+            anchor="w"
+        )
+        if display != docx.stem:
+            # Toon de echte bestandsnaam als kleinere subtitel zodat duidelijk
+            # is welk .docx-bestand bij deze aangepaste naam hoort.
+            ttk.Label(
+                title_box, text=docx.name,
+                foreground="#5b6471", font=("Segoe UI", 9),
+            ).pack(anchor="w")
+
+        actions = ttk.Frame(header)
+        actions.pack(side=tk.RIGHT)
         ttk.Button(
-            header, text="Opnieuw genereren",
+            actions, text="Naam aanpassen",
+            command=lambda p=docx: self._rename_file(p),
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            actions, text="Opnieuw genereren",
             command=lambda p=docx: self._regenerate_one(p),
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.LEFT)
 
         previews = _existing_previews(docx)
         if not previews:
@@ -603,7 +648,7 @@ class WordPreviewApp(tk.Tk):
             row_chunk = previews[row_start:row_start + cols]
             for offset, png in enumerate(row_chunk):
                 cell = self._build_thumbnail(
-                    row_frame, png, cmd, docx.name,
+                    row_frame, png, cmd, docx,
                     row_start + offset + 1, thumb_w, thumb_h,
                 )
                 cell.pack(side=tk.LEFT, padx=4, pady=2,
@@ -621,7 +666,7 @@ class WordPreviewApp(tk.Tk):
         parent: tk.Misc,
         png_path: Path,
         command: str,
-        docx_name: str,
+        docx: Path,
         page_number: int,
         thumb_w: int,
         thumb_h: int,
@@ -642,7 +687,7 @@ class WordPreviewApp(tk.Tk):
         self._photo_refs.append(photo)
 
         cell = tk.Frame(
-            parent, bg="#fafbfc", highlightthickness=2,
+            parent, bg="#fafbfc", highlightthickness=3,
             highlightbackground="#d8dbe0", highlightcolor="#1f4ed8",
             cursor="hand2",
         )
@@ -659,35 +704,158 @@ class WordPreviewApp(tk.Tk):
         self._selectable_cells.append(cell)
 
         def on_click(_event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
-            self._copy_command(command, docx_name, page_number)
+            self._copy_command(command, docx, page_number)
             for other in self._selectable_cells:
                 try:
-                    other.configure(highlightbackground="#d8dbe0")
+                    other.configure(
+                        highlightbackground="#d8dbe0",
+                        bg="#fafbfc",
+                    )
+                    for child in other.winfo_children():
+                        try:
+                            child.configure(bg="#fafbfc")
+                        except tk.TclError:
+                            pass
                 except tk.TclError:
                     pass
-            cell.configure(highlightbackground="#15803d")
+            # Markeer de aangeklikte cel met een groene rand en lichtgroene
+            # achtergrond zodat helder is wat er nu op het klembord staat.
+            cell.configure(highlightbackground="#15803d", bg="#dcfce7")
+            for child in cell.winfo_children():
+                try:
+                    child.configure(bg="#dcfce7")
+                except tk.TclError:
+                    pass
 
         for widget in (cell, label, page_label):
             widget.bind("<Button-1>", on_click)
 
         def on_enter(_e: tk.Event) -> None:  # type: ignore[type-arg]
-            cell.configure(highlightbackground="#1f4ed8")
+            current = str(cell.cget("highlightbackground"))
+            if current != "#15803d":
+                cell.configure(highlightbackground="#1f4ed8")
 
         def on_leave(_e: tk.Event) -> None:  # type: ignore[type-arg]
-            cell.configure(highlightbackground="#d8dbe0")
+            current = str(cell.cget("highlightbackground"))
+            if current != "#15803d":
+                cell.configure(highlightbackground="#d8dbe0")
 
         cell.bind("<Enter>", on_enter)
         cell.bind("<Leave>", on_leave)
 
         return cell
 
-    def _copy_command(self, command: str, docx_name: str, page: int) -> None:
+    # ------------------------------------------------------------------
+    # Custom names
+    # ------------------------------------------------------------------
+
+    def _display_name(self, docx: Path) -> str:
+        return self._names.get(docx.stem) or docx.stem
+
+    def _rename_file(self, docx: Path) -> None:
+        if self._busy:
+            return
+        current = self._names.get(docx.stem, "")
+        prompt = (
+            f"Geef een eigen naam voor:\n{docx.name}\n\n"
+            "Laat leeg om de bestandsnaam weer te gebruiken."
+        )
+        new_name = simpledialog.askstring(
+            "Naam aanpassen", prompt, parent=self,
+            initialvalue=current,
+        )
+        if new_name is None:
+            return  # geannuleerd
+        new_name = new_name.strip()
+        _save_name(docx.stem, new_name or None)
+        self._names = _load_names()
+        self._render_all()
+        if new_name:
+            self.status_var.set(
+                f"Naam voor {docx.name} aangepast naar '{new_name}'."
+            )
+        else:
+            self.status_var.set(f"Aangepaste naam voor {docx.name} verwijderd.")
+
+    # ------------------------------------------------------------------
+    # Klembord + duidelijke bevestiging
+    # ------------------------------------------------------------------
+
+    def _copy_command(self, command: str, docx: Path, page: int) -> None:
         self.clipboard_clear()
         self.clipboard_append(command)
         self.update()  # zorgt dat de waarde echt op het systeem-klembord staat
+        display = self._display_name(docx)
         self.status_var.set(
-            f"INCLUDETEXT gekopieerd voor '{docx_name}' (preview p. {page})."
+            f"INCLUDETEXT gekopieerd voor '{display}' (preview p. {page})."
         )
+        self._show_toast(
+            f"\u2713 INCLUDETEXT gekopieerd\n{display}  -  pagina {page}"
+        )
+
+    # ------------------------------------------------------------------
+    # Toast (bevestigingsmelding onderin)
+    # ------------------------------------------------------------------
+
+    def _ensure_toast(self) -> None:
+        if self._toast is not None and self._toast.winfo_exists():
+            return
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)
+        toast.transient(self)
+        toast.attributes("-topmost", True)
+        try:
+            # Klikken/typen mag niet de toast als focus opeisen op Windows.
+            toast.attributes("-toolwindow", True)
+        except tk.TclError:
+            pass
+        toast.configure(bg="#15803d")
+        label = tk.Label(
+            toast, text="", bg="#15803d", fg="#ffffff",
+            font=("Segoe UI", 12, "bold"), padx=24, pady=12, justify="center",
+        )
+        label.pack()
+        self._toast = toast
+        self._toast_label = label
+        toast.withdraw()
+
+    def _show_toast(self, message: str) -> None:
+        self._ensure_toast()
+        assert self._toast is not None and self._toast_label is not None
+        self._toast_label.configure(text=message)
+        self._toast.update_idletasks()
+
+        # Plaats midden-onderaan het hoofdvenster.
+        try:
+            self.update_idletasks()
+            root_x = self.winfo_rootx()
+            root_y = self.winfo_rooty()
+            root_w = self.winfo_width()
+            root_h = self.winfo_height()
+            tw = self._toast.winfo_reqwidth()
+            th = self._toast.winfo_reqheight()
+            x = root_x + (root_w - tw) // 2
+            y = root_y + root_h - th - 60
+            self._toast.geometry(f"+{x}+{y}")
+        except tk.TclError:
+            pass
+        self._toast.deiconify()
+        self._toast.lift()
+
+        if self._toast_after_id is not None:
+            try:
+                self.after_cancel(self._toast_after_id)
+            except (ValueError, tk.TclError):
+                pass
+        self._toast_after_id = self.after(2200, self._hide_toast)
+
+    def _hide_toast(self) -> None:
+        self._toast_after_id = None
+        if self._toast is not None and self._toast.winfo_exists():
+            try:
+                self._toast.withdraw()
+            except tk.TclError:
+                pass
 
 
 # ---------------------------------------------------------------------------
