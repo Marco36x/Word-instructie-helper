@@ -579,7 +579,17 @@ class WordPreviewApp(tk.Tk):
             return
 
         cols = max(MIN_COLUMNS, int(self.columns_var.get() or DEFAULT_COLUMNS))
-        canvas_width = self.canvas.winfo_width() or 1200
+        # Bepaal de bruikbare breedte op basis van de inner-frame als die al
+        # zichtbaar is, anders het canvas, anders het hoofdvenster. Sommige
+        # Windows-thema's geven pas een betrouwbare breedte na de eerste
+        # mainloop-tick, dus updaten we eerst de geometrie.
+        self.update_idletasks()
+        candidates = [
+            self.inner.winfo_width(),
+            self.canvas.winfo_width(),
+            self.winfo_width(),
+        ]
+        canvas_width = max((w for w in candidates if w > 1), default=1200)
         usable = max(canvas_width - 40, cols * (THUMB_MIN_WIDTH + 12))
         thumb_width = max(THUMB_MIN_WIDTH, (usable // cols) - 12)
         thumb_height = int(thumb_width * 1.414)
@@ -631,35 +641,28 @@ class WordPreviewApp(tk.Tk):
             ).pack(anchor="w", padx=4)
             return
 
-        # Container voor alle rijen van dit bestand. We gebruiken tk.Frame
-        # i.p.v. ttk.Frame omdat sommige TTK-themes (vooral op Windows) de
-        # breedte niet goed doorgeven aan een ingebed Canvas-window — dan
-        # ontstaan de cellen pas in volle breedte na een resize.
-        rows_container = tk.Frame(section, bg=self["bg"])
-        rows_container.pack(fill=tk.X)
+        # Eén grid-container per bestand. We zetten elke kolom op een vaste
+        # minimale breedte (geen weight=1, geen uniform) zodat thumbnails
+        # ALTIJD naast elkaar staan, ongeacht Tk-thema, DPI-scaling of
+        # of het parent-frame al een definitieve breedte heeft. We gebruiken
+        # tk.Frame i.p.v. ttk.Frame omdat sommige Windows-thema's de breedte
+        # niet betrouwbaar doorgeven aan ingebedde ttk-containers.
+        grid_container = tk.Frame(section, bg=self["bg"])
+        grid_container.pack(anchor="w", fill=tk.NONE, expand=False)
+
+        cell_w = thumb_w + 12
+        for c in range(cols):
+            grid_container.columnconfigure(c, weight=0, minsize=cell_w)
 
         cmd = _build_include_command(docx)
 
-        # Pak previews per rij, gebruik pack(side=LEFT) zodat thumbnails
-        # gegarandeerd naast elkaar staan, ongeacht het Tk-thema.
-        for row_start in range(0, len(previews), cols):
-            row_frame = tk.Frame(rows_container, bg=self["bg"])
-            row_frame.pack(fill=tk.X, pady=2)
-            row_chunk = previews[row_start:row_start + cols]
-            for offset, png in enumerate(row_chunk):
-                cell = self._build_thumbnail(
-                    row_frame, png, cmd, docx,
-                    row_start + offset + 1, thumb_w, thumb_h,
-                )
-                cell.pack(side=tk.LEFT, padx=4, pady=2,
-                          fill=tk.NONE, expand=False, anchor="n")
-            # Vul resterende kolommen op met lege placeholders zodat de rij
-            # niet uitlijnt als de laatste rij minder thumbs heeft.
-            for _ in range(cols - len(row_chunk)):
-                spacer = tk.Frame(row_frame, bg=self["bg"],
-                                  width=thumb_w + 12, height=1)
-                spacer.pack_propagate(False)
-                spacer.pack(side=tk.LEFT, padx=4)
+        for index, png in enumerate(previews):
+            row, col = divmod(index, cols)
+            cell = self._build_thumbnail(
+                grid_container, png, cmd, docx,
+                index + 1, thumb_w, thumb_h,
+            )
+            cell.grid(row=row, column=col, padx=4, pady=4, sticky="nw")
 
     def _build_thumbnail(
         self,
