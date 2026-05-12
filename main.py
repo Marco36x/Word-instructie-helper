@@ -32,10 +32,36 @@ from fastapi.staticfiles import StaticFiles
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("word_preview")
 
-BASE_DIR = Path(__file__).parent.resolve()
+def _resource_dir() -> Path:
+    """Read-only resources (e.g. ``static/``).
+
+    When PyInstaller-frozen, files bundled via ``--add-data`` are extracted to
+    a temporary path exposed via ``sys._MEIPASS``. Otherwise we use the
+    directory next to ``main.py``.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).parent.resolve()
+
+
+def _user_dir() -> Path:
+    """Read-write user data (``word_files/`` en ``previews/``).
+
+    When frozen, sits next to the executable so the user can simply drop docx
+    files in ``word_files/`` naast de .exe. In development this is the repo
+    root (same as the resource dir).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent.resolve()
+    return Path(__file__).parent.resolve()
+
+
+RESOURCE_DIR = _resource_dir()
+BASE_DIR = _user_dir()
 WORD_DIR = BASE_DIR / "word_files"
 PREVIEW_DIR = BASE_DIR / "previews"
-STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR = RESOURCE_DIR / "static"
 
 WORD_DIR.mkdir(exist_ok=True)
 PREVIEW_DIR.mkdir(exist_ok=True)
@@ -403,9 +429,14 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 def main() -> None:
     import argparse
+    import multiprocessing
     import webbrowser
 
     import uvicorn
+
+    # Required when running as a PyInstaller-frozen exe so any child
+    # processes spawned by dependencies do not re-execute main().
+    multiprocessing.freeze_support()
 
     parser = argparse.ArgumentParser(description="Word Preview App")
     parser.add_argument("--host", default="127.0.0.1")
@@ -418,6 +449,7 @@ def main() -> None:
     args = parser.parse_args()
 
     url = f"http://{args.host}:{args.port}"
+    logger.info("Resource directory:        %s", RESOURCE_DIR)
     logger.info("Word-bestanden directory: %s", WORD_DIR)
     logger.info("Previews directory:        %s", PREVIEW_DIR)
     logger.info("Server op %s", url)
