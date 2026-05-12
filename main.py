@@ -3,12 +3,14 @@
 Een lokale FastAPI-applicatie die previews genereert van .docx-bestanden in
 ``word_files/`` (een submap van de programma-directory) en de previews opslaat
 in ``previews/``. Via een browser-UI scrol je door de previews en kopieer je
-met een klik de Word INCLUDETEXT-instructie naar het klembord. In Word druk je
-Ctrl+F9 om een veld te maken en plak je het commando ertussen.
+met een klik de inhoud van een Word-document naar het klembord, zodat je
+het direct in je eigen Word-document kunt plakken. Als alternatief kun je nog
+steeds de Word INCLUDETEXT-instructie naar het klembord kopieren.
 
-Werkt op Windows (gebruikt Word via docx2pdf) en op Linux/macOS als fallback
-(via LibreOffice headless), zodat je het ook op een niet-Windows-machine kan
-testen.
+Werkt op Windows (gebruikt Microsoft Word via docx2pdf voor previews en via
+pywin32/COM voor het kopieren van de inhoud met behoud van opmaak). Op
+Linux/macOS is er een fallback (LibreOffice voor previews, platte tekst voor
+het klembord) zodat het ook op een niet-Windows-machine te testen is.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +204,184 @@ def _build_include_command(docx_path: Path) -> str:
     absolute = str(docx_path.resolve())
     escaped = absolute.replace("\\", "\\\\")
     return f'INCLUDETEXT "{escaped}"'
+
+
+WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _extract_text_from_docx(docx_path: Path) -> str:
+    """Extract plain text from a ``.docx`` by parsing ``word/document.xml``.
+
+    Used as a cross-platform fallback when Microsoft Word (via COM) is not
+    available. Behoudt geen opmaak; voor volledige opmaak is Windows + Word
+    nodig.
+    """
+    with zipfile.ZipFile(docx_path) as archive:
+        try:
+            xml_bytes = archive.read("word/document.xml")
+        except KeyError as exc:
+            raise RuntimeError(
+                f"{docx_path.name} bevat geen 'word/document.xml' "
+                "en lijkt geen geldig .docx-bestand te zijn."
+            ) from exc
+
+    root = ET.fromstring(xml_bytes)
+    paragraphs: list[str] = []
+    for paragraph in root.iter(f"{WORD_NS}p"):
+        runs: list[str] = []
+        for node in paragraph.iter():
+            tag = node.tag
+            if tag == f"{WORD_NS}t" and node.text:
+                runs.append(node.text)
+            elif tag in (f"{WORD_NS}br", f"{WORD_NS}cr"):
+                runs.append("\n")
+            elif tag == f"{WORD_NS}tab":
+                runs.append("\t")
+        paragraphs.append("".join(runs))
+    return "\n".join(paragraphs).strip()
+
+
+def _set_clipboard_text(text: str) -> str:
+    """Place ``text`` on the system clipboard. Returns the tool that was used.
+
+    On Windows we use the ``win32clipboard`` API. On macOS we use ``pbcopy``.
+    On Linux/BSD we try ``wl-copy``, ``xclip`` en ``xsel`` op volgorde.
+    """
+    system = platform.system()
+    if system == "Windows":
+        try:
+            import win32clipboard  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - depends on platform
+            raise RuntimeError(
+                "pywin32 niet geinstalleerd. Voer 'pip install pywin32' uit."
+            ) from exc
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        return "win32clipboard"
+
+    candidates: list[list[str]]
+    if system == "Darwin":
+        candidates = [["pbcopy"]]
+    else:
+        candidates = [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]
+
+    last_error: Exception | None = None
+    for cmd in candidates:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.run(cmd, input=text, text=True, check=True)
+            return cmd[0]
+        except (subprocess.CalledProcessError, OSError) as exc:
+            last_error = exc
+
+    hint = (
+        "Installeer 'xclip' (sudo apt install xclip) of 'wl-clipboard'."
+        if system == "Linux"
+        else "Installeer een clipboard-tool voor je systeem."
+    )
+    raise RuntimeError(
+        f"Geen werkende clipboard-tool gevonden. {hint}"
+    ) from last_error
+
+
+def _copy_docx_to_clipboard(docx_path: Path) -> dict[str, Any]:
+    """Plaats de inhoud van ``docx_path`` op het klembord zodat de gebruiker
+    het direct in zijn eigen Word-document kan plakken.
+
+    Op Windows openen we Word via COM en kopieren we ``Document.Content``,
+    waardoor het volledige document (tekst, opmaak, tabellen, afbeeldingen)
+    op het klembord komt in alle formats die Word normaal gebruikt. Na de
+    Copy roepen we ``OleFlushClipboard`` aan zodat de klembord-inhoud blijft
+    bestaan nadat we het document sluiten.
+
+    Op andere platforms valt de functie terug op platte tekst (alleen voor
+    ontwikkelen/testen; opmaak gaat verloren).
+    """
+    if _is_windows():
+        try:
+            import pythoncom  # type: ignore[import-not-found]
+            import win32com.client  # type: ignore[import-not-found]
+        except ImportError as exc:  # pragma: no cover - depends on platform
+            raise RuntimeError(
+                "pywin32 niet geinstalleerd. Voer 'pip install pywin32' uit."
+            ) from exc
+
+        pythoncom.CoInitialize()
+        try:
+            word = win32com.client.Dispatch("Word.Application")
+            previous_alerts = word.DisplayAlerts
+            word.DisplayAlerts = 0  # wdAlertsNone
+            doc = word.Documents.Open(
+                FileName=str(docx_path),
+                ReadOnly=True,
+                AddToRecentFiles=False,
+                Visible=False,
+            )
+            try:
+                doc.Content.Copy()
+                # Zorg dat de klembord-inhoud blijft nadat we het document
+                # sluiten (anders verdwijnt het bij Close).
+                pythoncom.OleFlushClipboard()
+            finally:
+                doc.Close(SaveChanges=0)  # wdDoNotSaveChanges
+                word.DisplayAlerts = previous_alerts
+        finally:
+            pythoncom.CoUninitialize()
+        return {
+            "mode": "word_com",
+            "format": "rich",
+            "note": (
+                "Volledige Word-inhoud (met opmaak) staat op het klembord. "
+                "Schakel over naar je doel-document en plak met Ctrl+V."
+            ),
+        }
+
+    text = _extract_text_from_docx(docx_path)
+    if not text:
+        raise RuntimeError(
+            f"Geen tekst gevonden in {docx_path.name}; niets gekopieerd."
+        )
+    tool = _set_clipboard_text(text)
+    return {
+        "mode": "plain_text",
+        "format": "text",
+        "tool": tool,
+        "note": (
+            "Alleen platte tekst gekopieerd (fallback zonder Microsoft Word). "
+            "Op Windows wordt de volledige opmaak meegenomen."
+        ),
+        "chars": len(text),
+    }
+
+
+@app.post("/api/copy-content/{stem}")
+def copy_content(stem: str) -> dict[str, Any]:
+    """Plaats de inhoud van het opgegeven .docx-bestand op het klembord."""
+    docx_path = WORD_DIR / f"{stem}.docx"
+    if not docx_path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"{docx_path.name} niet gevonden"
+        )
+    try:
+        result = _copy_docx_to_clipboard(docx_path)
+    except Exception as exc:  # noqa: BLE001 - surface to UI
+        logger.exception("Kopieren naar klembord mislukt voor %s", docx_path.name)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "name": docx_path.name,
+        "stem": docx_path.stem,
+        "path": str(docx_path.resolve()),
+        **result,
+    }
 
 
 @app.get("/api/health")

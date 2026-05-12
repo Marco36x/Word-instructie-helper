@@ -143,6 +143,11 @@
 
     button.primary:hover { background: var(--primary-dark); }
     button.primary.copied { background: var(--success); }
+    button.primary:disabled,
+    button.secondary:disabled {
+      opacity: 0.6;
+      cursor: progress;
+    }
 
     button.secondary {
       background: transparent;
@@ -154,7 +159,12 @@
       cursor: pointer;
     }
 
-    button.secondary:hover { background: rgba(31, 78, 216, 0.08); }
+    button.secondary:hover:not(:disabled) { background: rgba(31, 78, 216, 0.08); }
+    button.secondary.copied {
+      background: var(--success);
+      color: #fff;
+      border-color: var(--success);
+    }
 
     .command {
       padding: 0 20px 12px 20px;
@@ -163,6 +173,12 @@
       font-size: 12px;
       color: var(--muted);
       word-break: break-all;
+    }
+
+    .hint {
+      padding: 0 20px 12px 20px;
+      font-size: 12px;
+      color: var(--muted);
     }
 
     .pages {
@@ -317,34 +333,70 @@
             <div class="path">${escapeHtml(file.path)}</div>
           </div>
           <div class="actions">
-            <button class="primary" data-action="copy">Kopieer INCLUDETEXT</button>
+            <button class="primary" data-action="copy-content">Kopieer inhoud (plak in Word)</button>
+            <button class="secondary" data-action="copy-include" title="Kopieer een INCLUDETEXT-veld (plaats in Word met Ctrl+F9)">INCLUDETEXT</button>
             <button class="secondary" data-action="regen">Opnieuw genereren</button>
           </div>
         </div>
-        <div class="command" title="Dit komt op je klembord">${safeCommand}</div>
+        <div class="hint">Klik op een pagina of op <strong>Kopieer inhoud</strong> om het hele document op het klembord te zetten. Schakel daarna naar je doel-document in Word en plak met <kbd>Ctrl</kbd>+<kbd>V</kbd>.</div>
+        <div class="command" title="INCLUDETEXT-veld (alternatief, voor Word { }-velden)">${safeCommand}</div>
         ${file.error ? `<div class="error">Fout bij genereren: ${escapeHtml(file.error)}</div>` : ""}
         ${previewsHtml ? `<div class="pages">${previewsHtml}</div>` : ""}
       `;
 
-      const copyBtn = wrapper.querySelector('button[data-action="copy"]');
+      const copyContentBtn = wrapper.querySelector('button[data-action="copy-content"]');
+      const copyIncludeBtn = wrapper.querySelector('button[data-action="copy-include"]');
       const regenBtn = wrapper.querySelector('button[data-action="regen"]');
 
-      const doCopy = async () => {
+      const flashCopied = (btn, copiedLabel, originalLabel) => {
+        btn.classList.add("copied");
+        btn.textContent = copiedLabel;
+        setTimeout(() => {
+          btn.classList.remove("copied");
+          btn.textContent = originalLabel;
+        }, 1500);
+      };
+
+      const doCopyContent = async () => {
+        const originalLabel = copyContentBtn.textContent;
+        copyContentBtn.disabled = true;
+        copyContentBtn.textContent = "Bezig met kopieren...";
+        try {
+          const res = await fetch(
+            `/api/copy-content/${encodeURIComponent(file.stem)}`,
+            { method: "POST" }
+          );
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || `HTTP ${res.status}`);
+          }
+          const result = await res.json();
+          const richNote =
+            "Inhoud op klembord. Schakel naar Word en plak met Ctrl+V.";
+          const plainNote =
+            "Alleen tekst gekopieerd (geen Word/COM beschikbaar).";
+          showToast(result.mode === "word_com" ? richNote : plainNote);
+          flashCopied(copyContentBtn, "Gekopieerd!", originalLabel);
+        } catch (err) {
+          showToast("Kopieren mislukt: " + err.message);
+          copyContentBtn.textContent = originalLabel;
+        } finally {
+          copyContentBtn.disabled = false;
+        }
+      };
+
+      const doCopyInclude = async () => {
         const ok = await copyToClipboard(command);
         if (!ok) {
           showToast("Kopieren mislukt");
           return;
         }
-        copyBtn.classList.add("copied");
-        copyBtn.textContent = "Gekopieerd!";
         showToast("INCLUDETEXT-commando gekopieerd");
-        setTimeout(() => {
-          copyBtn.classList.remove("copied");
-          copyBtn.textContent = "Kopieer INCLUDETEXT";
-        }, 1500);
+        flashCopied(copyIncludeBtn, "Gekopieerd!", "INCLUDETEXT");
       };
 
-      copyBtn.addEventListener("click", doCopy);
+      copyContentBtn.addEventListener("click", doCopyContent);
+      copyIncludeBtn.addEventListener("click", doCopyInclude);
 
       wrapper.querySelectorAll(".page").forEach((page) => {
         page.addEventListener("click", () => {
@@ -352,7 +404,7 @@
             p.classList.remove("selected")
           );
           page.classList.add("selected");
-          doCopy();
+          doCopyContent();
         });
       });
 
