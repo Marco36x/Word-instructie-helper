@@ -7,3 +7,5 @@ previews/*/
 word_files/*
 !word_files/.gitkeep
 .DS_Store
+build/
+dist/
