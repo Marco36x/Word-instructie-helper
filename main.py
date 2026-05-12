@@ -109,7 +109,12 @@ def _convert_docx_to_pdf(docx_path: Path, pdf_path: Path) -> None:
 
 
 def _render_pdf_to_pngs(pdf_path: Path, output_dir: Path, base: str) -> list[Path]:
-    """Render every page of ``pdf_path`` to a PNG in ``output_dir``."""
+    """Render alleen de **eerste pagina** van ``pdf_path`` naar een PNG.
+
+    De applicatie toont per ``.docx`` één preview (de voorkant); oudere
+    pagina-bestanden van vorige versies worden bij elke generatie netjes
+    opgeruimd zodat er geen ongebruikte PNG's blijven slingeren.
+    """
     import fitz  # PyMuPDF
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -118,13 +123,15 @@ def _render_pdf_to_pngs(pdf_path: Path, output_dir: Path, base: str) -> list[Pat
 
     paths: list[Path] = []
     with fitz.open(str(pdf_path)) as doc:
+        if len(doc) == 0:
+            return paths
         zoom = PREVIEW_DPI / 72
         matrix = fitz.Matrix(zoom, zoom)
-        for index, page in enumerate(doc, start=1):
-            pix = page.get_pixmap(matrix=matrix, alpha=False)
-            png_path = output_dir / f"{base}_page_{index:03d}.png"
-            pix.save(str(png_path))
-            paths.append(png_path)
+        page = doc[0]
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        png_path = output_dir / f"{base}_page_001.png"
+        pix.save(str(png_path))
+        paths.append(png_path)
     return paths
 
 
@@ -139,11 +146,19 @@ def _generate_previews(docx_path: Path) -> list[Path]:
 
 
 def _existing_previews(docx_path: Path) -> list[Path]:
+    """Geef alleen de preview van pagina 1 terug (eventuele oudere extra
+    pagina-bestanden worden bij de volgende generatie opgeschoond)."""
     base = docx_path.stem
     out_dir = PREVIEW_DIR / base
     if not out_dir.exists():
         return []
-    return sorted(out_dir.glob(f"{base}_page_*.png"))
+    first = out_dir / f"{base}_page_001.png"
+    if first.exists():
+        return [first]
+    # Fallback: oude generaties gebruikten een andere nummering — pak de
+    # alfabetisch eerste preview die er nog ligt.
+    existing = sorted(out_dir.glob(f"{base}_page_*.png"))
+    return existing[:1]
 
 
 def _list_word_files() -> list[Path]:
@@ -594,143 +609,122 @@ class WordPreviewApp(tk.Tk):
         thumb_width = max(THUMB_MIN_WIDTH, (usable // cols) - 12)
         thumb_height = int(thumb_width * 1.414)
 
-        for docx in self._files:
-            self._render_file(docx, cols, thumb_width, thumb_height)
+        # Eén grid-container voor alle bestanden samen. Elke .docx krijgt
+        # één cel (eerste pagina als preview + naam + knoppen). Door elke
+        # kolom een vaste minimale breedte te geven en weight=0 te houden
+        # staan de cellen ALTIJD naast elkaar, ongeacht Tk-thema of DPI.
+        grid_container = tk.Frame(self.inner, bg=self["bg"])
+        grid_container.pack(anchor="nw", fill=tk.NONE, expand=False,
+                            padx=4, pady=4)
 
-    def _render_file(
-        self, docx: Path, cols: int, thumb_w: int, thumb_h: int
-    ) -> None:
-        section = ttk.Frame(self.inner, padding=(0, 8, 0, 16))
-        section.pack(fill=tk.X, pady=(0, 4))
-
-        header = ttk.Frame(section)
-        header.pack(fill=tk.X, pady=(0, 8))
-
-        title_box = ttk.Frame(header)
-        title_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        display = self._display_name(docx)
-        ttk.Label(title_box, text=display, style="FileTitle.TLabel").pack(
-            anchor="w"
-        )
-        if display != docx.stem:
-            # Toon de echte bestandsnaam als kleinere subtitel zodat duidelijk
-            # is welk .docx-bestand bij deze aangepaste naam hoort.
-            ttk.Label(
-                title_box, text=docx.name,
-                foreground="#5b6471", font=("Segoe UI", 9),
-            ).pack(anchor="w")
-
-        actions = ttk.Frame(header)
-        actions.pack(side=tk.RIGHT)
-        ttk.Button(
-            actions, text="Naam aanpassen",
-            command=lambda p=docx: self._rename_file(p),
-        ).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(
-            actions, text="Opnieuw genereren",
-            command=lambda p=docx: self._regenerate_one(p),
-        ).pack(side=tk.LEFT)
-
-        previews = _existing_previews(docx)
-        if not previews:
-            ttk.Label(
-                section,
-                text="Nog geen previews. Klik op 'Opnieuw genereren' of 'Vernieuwen'.",
-                foreground="#5b6471",
-            ).pack(anchor="w", padx=4)
-            return
-
-        # Eén grid-container per bestand. We zetten elke kolom op een vaste
-        # minimale breedte (geen weight=1, geen uniform) zodat thumbnails
-        # ALTIJD naast elkaar staan, ongeacht Tk-thema, DPI-scaling of
-        # of het parent-frame al een definitieve breedte heeft. We gebruiken
-        # tk.Frame i.p.v. ttk.Frame omdat sommige Windows-thema's de breedte
-        # niet betrouwbaar doorgeven aan ingebedde ttk-containers.
-        grid_container = tk.Frame(section, bg=self["bg"])
-        grid_container.pack(anchor="w", fill=tk.NONE, expand=False)
-
-        cell_w = thumb_w + 12
+        cell_w = thumb_width + 12
         for c in range(cols):
             grid_container.columnconfigure(c, weight=0, minsize=cell_w)
 
-        cmd = _build_include_command(docx)
-
-        for index, png in enumerate(previews):
+        for index, docx in enumerate(self._files):
             row, col = divmod(index, cols)
-            cell = self._build_thumbnail(
-                grid_container, png, cmd, docx,
-                index + 1, thumb_w, thumb_h,
-            )
-            cell.grid(row=row, column=col, padx=4, pady=4, sticky="nw")
+            card = self._build_file_card(grid_container, docx,
+                                         thumb_width, thumb_height)
+            card.grid(row=row, column=col, padx=6, pady=6, sticky="nw")
 
-    def _build_thumbnail(
-        self,
-        parent: tk.Misc,
-        png_path: Path,
-        command: str,
-        docx: Path,
-        page_number: int,
-        thumb_w: int,
-        thumb_h: int,
+    def _build_file_card(
+        self, parent: tk.Misc, docx: Path, thumb_w: int, thumb_h: int,
     ) -> tk.Widget:
-        try:
-            img = Image.open(png_path).convert("RGB")
-        except OSError as exc:
-            logger.exception("Kon preview niet laden: %s", png_path)
-            err_frame = ttk.Frame(parent, padding=8)
-            ttk.Label(
-                err_frame, text=f"[fout: {png_path.name}]\n{exc}",
-                foreground="#b91c1c",
-            ).pack()
-            return err_frame
-
-        img.thumbnail((thumb_w, thumb_h), Image.LANCZOS)
-        photo = ImageTk.PhotoImage(img)
-        self._photo_refs.append(photo)
-
+        cell_bg = "#fafbfc"
         cell = tk.Frame(
-            parent, bg="#fafbfc", highlightthickness=3,
+            parent, bg=cell_bg, highlightthickness=3,
             highlightbackground="#d8dbe0", highlightcolor="#1f4ed8",
             cursor="hand2",
         )
 
-        label = tk.Label(cell, image=photo, bg="#fafbfc", cursor="hand2")
-        label.pack(padx=6, pady=(6, 2))
+        # Thumbnail van de eerste pagina (of placeholder als die ontbreekt)
+        previews = _existing_previews(docx)
+        thumb_widget: tk.Widget
+        if previews:
+            try:
+                img = Image.open(previews[0]).convert("RGB")
+                img.thumbnail((thumb_w, thumb_h), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self._photo_refs.append(photo)
+                thumb_widget = tk.Label(
+                    cell, image=photo, bg=cell_bg, cursor="hand2",
+                )
+            except OSError as exc:
+                logger.exception("Kon preview niet laden: %s", previews[0])
+                thumb_widget = tk.Label(
+                    cell, text=f"[fout]\n{exc}",
+                    fg="#b91c1c", bg=cell_bg, width=20, height=10,
+                )
+        else:
+            thumb_widget = tk.Label(
+                cell, text="(nog geen preview)\nklik 'Opnieuw'",
+                fg="#5b6471", bg=cell_bg, justify="center",
+                width=max(16, thumb_w // 9),
+                height=max(10, thumb_h // 20),
+            )
+        thumb_widget.pack(padx=6, pady=(6, 4))
 
-        page_label = tk.Label(
-            cell, text=f"p. {page_number}", bg="#fafbfc",
-            fg="#5b6471", font=("Segoe UI", 9),
+        display = self._display_name(docx)
+        name_label = tk.Label(
+            cell, text=display, bg=cell_bg, fg="#0e1726",
+            font=("Segoe UI", 10, "bold"), wraplength=thumb_w,
+            justify="center", cursor="hand2",
         )
-        page_label.pack(pady=(0, 6))
+        name_label.pack(padx=6, pady=(0, 0))
+
+        subtitle: tk.Label | None = None
+        if display != docx.stem:
+            subtitle = tk.Label(
+                cell, text=docx.name, bg=cell_bg, fg="#5b6471",
+                font=("Segoe UI", 8), wraplength=thumb_w,
+                justify="center", cursor="hand2",
+            )
+            subtitle.pack(padx=6, pady=(0, 0))
+
+        buttons = tk.Frame(cell, bg=cell_bg)
+        buttons.pack(padx=4, pady=(6, 8))
+        ttk.Button(
+            buttons, text="Naam aanpassen",
+            command=lambda p=docx: self._rename_file(p),
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            buttons, text="Opnieuw",
+            command=lambda p=docx: self._regenerate_one(p),
+        ).pack(side=tk.LEFT, padx=2)
 
         self._selectable_cells.append(cell)
+        cmd = _build_include_command(docx)
+
+        def reset_cell_colors(target: tk.Widget, bg: str) -> None:
+            """Pas de achtergrondkleur recursief aan op cell + kinderen,
+            zodat ook de buttons-frame meegaat in de selectie-highlight."""
+            try:
+                target.configure(bg=bg)
+            except tk.TclError:
+                pass
+            for child in target.winfo_children():
+                # ttk.Button heeft geen bg-attribute; daar gaan we niet in mee.
+                if isinstance(child, ttk.Widget):
+                    continue
+                reset_cell_colors(child, bg)
 
         def on_click(_event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
-            self._copy_command(command, docx, page_number)
+            self._copy_command(cmd, docx, 1)
             for other in self._selectable_cells:
                 try:
-                    other.configure(
-                        highlightbackground="#d8dbe0",
-                        bg="#fafbfc",
-                    )
-                    for child in other.winfo_children():
-                        try:
-                            child.configure(bg="#fafbfc")
-                        except tk.TclError:
-                            pass
+                    other.configure(highlightbackground="#d8dbe0")
                 except tk.TclError:
                     pass
-            # Markeer de aangeklikte cel met een groene rand en lichtgroene
-            # achtergrond zodat helder is wat er nu op het klembord staat.
-            cell.configure(highlightbackground="#15803d", bg="#dcfce7")
-            for child in cell.winfo_children():
-                try:
-                    child.configure(bg="#dcfce7")
-                except tk.TclError:
-                    pass
+                reset_cell_colors(other, cell_bg)
+            # Markeer de aangeklikte cel met een groene rand + lichtgroene
+            # achtergrond zodat helder is welke preview op het klembord staat.
+            cell.configure(highlightbackground="#15803d")
+            reset_cell_colors(cell, "#dcfce7")
 
-        for widget in (cell, label, page_label):
+        clickable = [cell, thumb_widget, name_label, buttons]
+        if subtitle is not None:
+            clickable.append(subtitle)
+        for widget in clickable:
             widget.bind("<Button-1>", on_click)
 
         def on_enter(_e: tk.Event) -> None:  # type: ignore[type-arg]
@@ -784,16 +778,16 @@ class WordPreviewApp(tk.Tk):
     # Klembord + duidelijke bevestiging
     # ------------------------------------------------------------------
 
-    def _copy_command(self, command: str, docx: Path, page: int) -> None:
+    def _copy_command(self, command: str, docx: Path, _page: int = 1) -> None:
         self.clipboard_clear()
         self.clipboard_append(command)
         self.update()  # zorgt dat de waarde echt op het systeem-klembord staat
         display = self._display_name(docx)
         self.status_var.set(
-            f"INCLUDETEXT gekopieerd voor '{display}' (preview p. {page})."
+            f"INCLUDETEXT gekopieerd voor '{display}'."
         )
         self._show_toast(
-            f"\u2713 INCLUDETEXT gekopieerd\n{display}  -  pagina {page}"
+            f"\u2713 INCLUDETEXT gekopieerd\n{display}"
         )
 
     # ------------------------------------------------------------------
