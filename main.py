@@ -1,16 +1,18 @@
 """Word Preview App.
 
-Een lokale FastAPI-applicatie die previews genereert van .docx-bestanden in
-``word_files/`` (een submap van de programma-directory) en de previews opslaat
-in ``previews/``. Via een browser-UI scrol je door de previews en kopieer je
-met een klik de inhoud van een Word-document naar het klembord, zodat je
-het direct in je eigen Word-document kunt plakken. Als alternatief kun je nog
-steeds de Word INCLUDETEXT-instructie naar het klembord kopieren.
+Een lokale applicatie die previews genereert van .docx-bestanden in
+``word_files/`` (naast de executable / hoofdmap) en de previews opslaat in
+``previews/``. Standaard draait de app als **native Windows-desktop-app**:
+de UI wordt in een eigen venster getoond via pywebview (gebruikt de
+Microsoft Edge / WebView2-runtime die op Windows 10/11 standaard aanwezig
+is). Onder de motorkap loopt nog steeds een FastAPI-server op localhost.
+
+Met ``--web`` schakel je over naar de oude browser-modus.
 
 Werkt op Windows (gebruikt Microsoft Word via docx2pdf voor previews en via
 pywin32/COM voor het kopieren van de inhoud met behoud van opmaak). Op
 Linux/macOS is er een fallback (LibreOffice voor previews, platte tekst voor
-het klembord) zodat het ook op een niet-Windows-machine te testen is.
+het klembord) zodat het ook op een niet-Windows-machine te ontwikkelen is.
 """
 
 from __future__ import annotations
@@ -427,12 +429,144 @@ app.mount("/previews", StaticFiles(directory=PREVIEW_DIR), name="previews")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def main() -> None:
-    import argparse
-    import multiprocessing
+def _start_server_thread(host: str, port: int):
+    """Start uvicorn in a background thread and return the ``Server`` instance.
+
+    The returned server can be stopped via ``server.should_exit = True``.
+    The caller is responsible for waiting until ``server.started`` is true
+    before navigating to any URL.
+    """
+    import threading
+
+    import uvicorn
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+
+    def _run() -> None:
+        try:
+            server.run()
+        except Exception:  # noqa: BLE001 - background thread
+            logger.exception("Uvicorn server stopte met een fout")
+
+    thread = threading.Thread(target=_run, name="uvicorn-server", daemon=True)
+    thread.start()
+    return server, thread
+
+
+def _wait_until_server_ready(server, timeout: float = 20.0) -> None:
+    """Block until uvicorn has finished startup or ``timeout`` has elapsed."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if getattr(server, "started", False):
+            return
+        time.sleep(0.05)
+    raise RuntimeError("Server is niet binnen %.1fs gestart" % timeout)
+
+
+def _pick_free_port(host: str) -> int:
+    """Bind a socket on ``host:0`` and let the OS pick a free port."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return sock.getsockname()[1]
+
+
+def _run_desktop_app(host: str, port: int) -> None:
+    """Run the app as a native desktop window using pywebview.
+
+    Starts uvicorn on a daemon thread, opens a webview window pointing at
+    the local server, and shuts the server down when the window closes.
+    If the webview backend fails to initialise (e.g. missing WebView2
+    runtime on Windows, missing GTK/Qt on Linux), automatically falls back
+    to opening the system browser pointing at the same local server.
+    """
+    try:
+        import webview  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - install issue
+        logger.warning(
+            "pywebview niet beschikbaar (%s); val terug op browsermodus.", exc
+        )
+        _run_web_server(host, port, open_browser=True)
+        return
+
+    server, _thread = _start_server_thread(host, port)
+    try:
+        _wait_until_server_ready(server)
+    except Exception:
+        server.should_exit = True
+        raise
+
+    url = f"http://{host}:{port}"
+    logger.info("Desktop-app opent venster op %s", url)
+
+    window = webview.create_window(
+        title="Word-instructie-helper",
+        url=url,
+        width=1280,
+        height=860,
+        min_size=(900, 600),
+        resizable=True,
+    )
+
+    try:
+        webview.start()
+    except Exception as exc:  # noqa: BLE001 - any backend-init error
+        logger.warning(
+            "Webview-backend kon niet starten (%s); val terug op browser.", exc
+        )
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import threading
+
+            # Houd de daemon-server in leven tot Ctrl+C / signal.
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
+
+    # Schoon op zodra het venster sluit (of de fallback eindigt).
+    server.should_exit = True
+    try:
+        window.destroy()  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _run_web_server(host: str, port: int, open_browser: bool) -> None:
+    """Run the app in browser mode (legacy behaviour)."""
     import webbrowser
 
     import uvicorn
+
+    url = f"http://{host}:{port}"
+    logger.info("Server op %s", url)
+
+    if open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001
+            pass
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def main() -> None:
+    import argparse
+    import multiprocessing
 
     # Required when running as a PyInstaller-frozen exe so any child
     # processes spawned by dependencies do not re-execute main().
@@ -440,27 +574,50 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Word Preview App")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
     parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Open de browser niet automatisch.",
+        "--port",
+        type=int,
+        default=0,
+        help="Poort voor de interne HTTP-server. 0 = automatisch.",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--desktop",
+        dest="mode",
+        action="store_const",
+        const="desktop",
+        help="Open de app als een eigen Windows-venster (standaard).",
+    )
+    mode.add_argument(
+        "--web",
+        dest="mode",
+        action="store_const",
+        const="web",
+        help="Start een HTTP-server en open de browser (legacy modus).",
+    )
+    mode.add_argument(
+        "--no-browser",
+        dest="mode",
+        action="store_const",
+        const="server",
+        help="Alleen de HTTP-server, zonder browser of venster.",
+    )
+    parser.set_defaults(mode="desktop")
     args = parser.parse_args()
 
-    url = f"http://{args.host}:{args.port}"
+    port = args.port or _pick_free_port(args.host)
+
     logger.info("Resource directory:        %s", RESOURCE_DIR)
     logger.info("Word-bestanden directory: %s", WORD_DIR)
     logger.info("Previews directory:        %s", PREVIEW_DIR)
-    logger.info("Server op %s", url)
+    logger.info("Modus: %s (poort %s)", args.mode, port)
 
-    if not args.no_browser:
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001
-            pass
-
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    if args.mode == "desktop":
+        _run_desktop_app(args.host, port)
+    elif args.mode == "web":
+        _run_web_server(args.host, port, open_browser=True)
+    else:  # server-only
+        _run_web_server(args.host, port, open_browser=False)
 
 
 if __name__ == "__main__":

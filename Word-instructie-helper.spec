@@ -5,8 +5,10 @@
 #   pyinstaller Word-instructie-helper.spec
 #
 # Resultaat staat in dist/Word-instructie-helper(.exe). Op Windows krijgt
-# de eindgebruiker een enkele executable die hij naast een ``word_files/``
-# map kan plaatsen; deze map wordt automatisch aangemaakt bij eerste start.
+# de eindgebruiker een enkele executable die de app als native venster
+# (via pywebview + de WebView2/Edge-runtime) toont. Naast de .exe ontstaan
+# automatisch ``word_files/`` (voor de eigen .docx-bestanden) en
+# ``previews/`` (cache).
 
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
@@ -23,12 +25,22 @@ hidden_imports += collect_submodules("anyio")
 # PyMuPDF is meestal vanzelf compleet, maar collect ze voor de zekerheid.
 hidden_imports += collect_submodules("pymupdf")
 hidden_imports += collect_submodules("fitz")
+# Pywebview kiest zijn platform-backend op runtime via importlib.
+hidden_imports += collect_submodules("webview")
+# Edge/WebView2 op Windows draait via pythonnet/clr_loader.
+hidden_imports += [
+    "clr",
+    "clr_loader",
+    "pythonnet",
+]
 
 datas: list[tuple[str, str]] = []
 # Bundle de statische HTML/JS-assets onder ``static/`` in het bundle.
 datas.append(("static", "static"))
 # Pydantic v2 heeft soms extra data files nodig.
 datas += collect_data_files("pydantic")
+# Pywebview heeft een paar JS-bridge bestanden die meegebundeld moeten worden.
+datas += collect_data_files("webview")
 
 
 a = Analysis(
@@ -59,7 +71,9 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    # console=False -> echte Windows-app: geen zwart consolevenster naast
+    # het webview-venster. Logs gaan dan naar logbestand of stderr-buffer.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
