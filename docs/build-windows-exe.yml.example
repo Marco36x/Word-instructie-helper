@@ -34,6 +34,10 @@ jobs:
       - name: Smoke-test executable (HTTP health check)
         shell: pwsh
         run: |
+          # In CI start we de exe in --no-browser modus zodat er geen
+          # webview-venster geopend wordt (de runner heeft geen desktop
+          # sessie). Op de echte desktop start de exe standaard in
+          # --desktop modus (eigen Windows-venster via pywebview).
           $exe = "dist\Word-instructie-helper.exe"
           if (-not (Test-Path $exe)) { throw "Executable not produced at $exe" }
           $proc = Start-Process -FilePath $exe `

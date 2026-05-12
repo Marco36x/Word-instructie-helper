@@ -3,3 +3,6 @@ uvicorn[standard]>=0.29
 PyMuPDF>=1.24
 docx2pdf>=0.1.8 ; sys_platform == "win32"
 pywin32>=306 ; sys_platform == "win32"
+pywebview>=5.0
+# Voor de Edge/WebView2 backend van pywebview op Windows.
+pythonnet>=3.0 ; sys_platform == "win32"

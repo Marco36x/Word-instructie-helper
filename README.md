@@ -1,7 +1,9 @@
 # Word-instructie-helper
 
-Lokale FastAPI-app om compleet Word-documenten naar je huidige document over
-te nemen.
+Lokale Windows-desktop-app om compleet Word-documenten naar je huidige
+document over te nemen. De UI draait in een eigen Windows-venster (via
+pywebview / WebView2), met op de achtergrond een FastAPI-server op
+localhost.
 
 ## Wat doet het
 - Bladert door alle `.docx`-bestanden in `word_files/` en toont per bestand een
@@ -20,9 +22,18 @@ te nemen.
   zet (vereist `xclip`/`wl-copy`/`pbcopy`).
 
 ## Starten (vanuit broncode)
+
+Standaard opent de app als native venster (vereist pywebview, op Windows met
+WebView2 — al voorgeinstalleerd op Win10/11):
 ```
 pip install -r requirements.txt
 python main.py
+```
+
+Legacy-modi voor debugging of als de WebView2-runtime ontbreekt:
+```
+python main.py --web          # start HTTP-server en open de browser
+python main.py --no-browser   # alleen HTTP-server (headless)
 ```
 
 ## Standalone .exe (Windows)
@@ -53,10 +64,25 @@ Het resultaat staat in `dist/Word-instructie-helper.exe` (~60 MB).
 1. Plaats `Word-instructie-helper.exe` in een eigen map.
 2. Maak naast de .exe een submap `word_files/` (of laat de .exe deze automatisch
    aanmaken bij eerste start) en plaats daar je `.docx`-bestanden.
-3. Dubbelklik op de .exe — de FastAPI-server start en je standaardbrowser
-   opent automatisch op `http://127.0.0.1:8765`.
+3. Dubbelklik op de .exe. De app opent een eigen Windows-venster met de UI
+   (geen browser, geen consolevenster). Onder water draait een lokale
+   FastAPI-server op een vrije poort.
 4. Klik op een document/pagina, schakel naar je doel-document in Word en plak
    met `Ctrl+V`.
 
 De .exe maakt naast zichzelf een `previews/`-map aan voor gecachte
 pagina-previews; deze kan veilig weggegooid worden.
+
+#### Vereisten op de doel-PC
+- **WebView2-runtime**: standaard aanwezig op Windows 10 (sinds april 2024)
+  en Windows 11. Op oudere installaties: download de Evergreen-installer
+  van Microsoft (“WebView2 Runtime”) en installeer eenmalig.
+- **Microsoft Word**: nodig voor de rich-format kopieer-route (behoud van
+  tabellen/opmaak/afbeeldingen). Zonder Word valt de app terug op platte
+  tekst.
+
+#### Opdrachtregel-opties van de .exe
+- (geen) of `--desktop`: open in een eigen venster (standaard).
+- `--web`: start de HTTP-server en open de browser (legacy).
+- `--no-browser`: alleen de HTTP-server zonder venster of browser (voor
+  scripting/CI).
