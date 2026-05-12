@@ -325,11 +325,13 @@ def _copy_docx_to_clipboard(docx_path: Path) -> dict[str, Any]:
     """Plaats de inhoud van ``docx_path`` op het klembord zodat de gebruiker
     het direct in zijn eigen Word-document kan plakken.
 
-    Op Windows openen we Word via COM en kopieren we ``Document.Content``,
-    waardoor het volledige document (tekst, opmaak, tabellen, afbeeldingen)
-    op het klembord komt in alle formats die Word normaal gebruikt. Na de
-    Copy roepen we ``OleFlushClipboard`` aan zodat de klembord-inhoud blijft
-    bestaan nadat we het document sluiten.
+    Op Windows starten we via ``DispatchEx`` een **aparte, onzichtbare**
+    Word-instantie (los van de Word die de gebruiker zelf openheeft). Die
+    aparte instantie opent het bron-document, kopieert ``Document.Content``
+    naar het klembord en sluit zichzelf netjes weer af. Zo wordt de Word
+    van de gebruiker niet aangeraakt (geen flikkeren, geen focus-verlies)
+    en blijft de klembord-inhoud (rijke opmaak) staan dankzij
+    ``OleFlushClipboard``.
 
     Op andere platforms valt de functie terug op platte tekst (alleen voor
     ontwikkelen/testen; opmaak gaat verloren).
@@ -344,9 +346,18 @@ def _copy_docx_to_clipboard(docx_path: Path) -> dict[str, Any]:
             ) from exc
 
         pythoncom.CoInitialize()
+        word = None
+        doc = None
         try:
-            word = win32com.client.Dispatch("Word.Application")
-            previous_alerts = word.DisplayAlerts
+            # DispatchEx forceert een nieuw, los Word-proces in plaats van
+            # aan te haken bij de Word die de gebruiker al openheeft. Zo
+            # ziet de gebruiker geen flikkeren en wordt focus niet gestolen.
+            word = win32com.client.DispatchEx("Word.Application")
+            word.Visible = False
+            try:
+                word.ScreenUpdating = False
+            except Exception:  # noqa: BLE001 - oude Word-versies
+                pass
             word.DisplayAlerts = 0  # wdAlertsNone
             doc = word.Documents.Open(
                 FileName=str(docx_path),
@@ -354,15 +365,24 @@ def _copy_docx_to_clipboard(docx_path: Path) -> dict[str, Any]:
                 AddToRecentFiles=False,
                 Visible=False,
             )
-            try:
-                doc.Content.Copy()
-                # Zorg dat de klembord-inhoud blijft nadat we het document
-                # sluiten (anders verdwijnt het bij Close).
-                pythoncom.OleFlushClipboard()
-            finally:
-                doc.Close(SaveChanges=0)  # wdDoNotSaveChanges
-                word.DisplayAlerts = previous_alerts
+            doc.Content.Copy()
+            # OleFlushClipboard moet *vóór* het afsluiten van Word: hij
+            # serialiseert de OLE-data zodat het klembord blijft werken
+            # nadat ons Word-proces is afgesloten.
+            pythoncom.OleFlushClipboard()
         finally:
+            if doc is not None:
+                try:
+                    doc.Close(SaveChanges=0)  # wdDoNotSaveChanges
+                except Exception:  # noqa: BLE001
+                    logger.exception("Kon hulp-document niet sluiten")
+            if word is not None:
+                try:
+                    word.Quit(SaveChanges=0)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "Kon hulp-Word-instantie niet netjes afsluiten"
+                    )
             pythoncom.CoUninitialize()
         return {
             "mode": "word_com",
