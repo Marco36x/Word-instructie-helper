@@ -45,7 +45,35 @@ PREVIEW_DPI = 110
 MIN_COLUMNS = 4
 MAX_COLUMNS = 12
 DEFAULT_COLUMNS = 4
-THUMB_MIN_WIDTH = 130
+THUMB_MIN_WIDTH = 150
+
+# ---------------------------------------------------------------------------
+# Visueel palet — geinspireerd op moderne document-browsers (Office 365,
+# Adobe Bridge, macOS Finder Gallery view). Eén centrale plek zodat het
+# uiterlijk consistent blijft.
+# ---------------------------------------------------------------------------
+
+COLOR_BG = "#f5f6f8"
+COLOR_TOOLBAR_BG = "#ffffff"
+COLOR_TOOLBAR_BORDER = "#e2e6ec"
+COLOR_CARD_BG = "#ffffff"
+COLOR_CARD_BORDER = "#e2e6ec"
+COLOR_CARD_BORDER_HOVER = "#94a3b8"
+COLOR_CARD_BORDER_SELECTED = "#1d4ed8"
+COLOR_CARD_BG_SELECTED = "#eef4ff"
+COLOR_TEXT_PRIMARY = "#0f172a"
+COLOR_TEXT_SECONDARY = "#64748b"
+COLOR_TEXT_MUTED = "#94a3b8"
+COLOR_ACCENT = "#1d4ed8"
+COLOR_ACCENT_DARK = "#1e40af"
+COLOR_DIVIDER = "#e2e6ec"
+COLOR_THUMB_FRAME = "#f1f5f9"
+COLOR_TOAST_BG = "#0f172a"
+COLOR_TOAST_FG = "#f8fafc"
+COLOR_BADGE_BG = "#1d4ed8"
+COLOR_BADGE_FG = "#ffffff"
+
+FONT_BASE = "Segoe UI"
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +319,8 @@ class WordPreviewApp(tk.Tk):
         self._render_after_id: str | None = None
         self._last_canvas_width = 0
         self._selectable_cells: list[tk.Frame] = []
+        self._selected_cell: tk.Frame | None = None
+        self._selected_badge: tk.Label | None = None
         self._names: dict[str, str] = _load_names()
         self._toast: tk.Toplevel | None = None
         self._toast_label: tk.Label | None = None
@@ -307,89 +337,186 @@ class WordPreviewApp(tk.Tk):
     # ------------------------------------------------------------------
 
     def _configure_style(self) -> None:
+        # Op Windows zorgen voor scherpe rendering bij display scaling > 100%.
+        if _is_windows():
+            try:
+                from ctypes import windll  # type: ignore[attr-defined]
+                windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                pass
+
+        self.configure(bg=COLOR_BG)
+
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Toolbar.TFrame", background="#1f4ed8")
+
+        # Generieke ttk-defaults zodat we niet voor elk widget een aparte
+        # stijl hoeven te definieren.
+        style.configure(".", font=(FONT_BASE, 10))
+        style.configure("TFrame", background=COLOR_BG)
+        style.configure("TLabel", background=COLOR_BG,
+                        foreground=COLOR_TEXT_PRIMARY)
+        style.configure("TSeparator", background=COLOR_DIVIDER)
+
+        # Toolbar
+        style.configure("Toolbar.TFrame", background=COLOR_TOOLBAR_BG)
         style.configure(
-            "Toolbar.TButton",
-            background="#1f4ed8",
-            foreground="#ffffff",
-            padding=(10, 6),
-            relief="flat",
+            "AppTitle.TLabel", background=COLOR_TOOLBAR_BG,
+            foreground=COLOR_TEXT_PRIMARY, font=(FONT_BASE, 14, "bold"),
+            padding=(4, 2),
+        )
+        style.configure(
+            "Toolbar.TLabel", background=COLOR_TOOLBAR_BG,
+            foreground=COLOR_TEXT_SECONDARY, font=(FONT_BASE, 10),
+            padding=(4, 2),
+        )
+
+        # Primaire actie-knop (blauw)
+        style.configure(
+            "Primary.TButton", background=COLOR_ACCENT, foreground="#ffffff",
+            borderwidth=0, focusthickness=0, padding=(14, 7),
+            font=(FONT_BASE, 10),
         )
         style.map(
-            "Toolbar.TButton",
-            background=[("active", "#1839a6")],
-            foreground=[("disabled", "#cfd8ef")],
+            "Primary.TButton",
+            background=[
+                ("active", COLOR_ACCENT_DARK),
+                ("disabled", "#94a3b8"),
+            ],
+            foreground=[("disabled", "#e2e8f0")],
+        )
+
+        # Secundaire knop (grijstinten)
+        style.configure(
+            "Secondary.TButton", background="#f1f5f9",
+            foreground=COLOR_TEXT_PRIMARY, borderwidth=0, focusthickness=0,
+            padding=(14, 7), font=(FONT_BASE, 10),
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[
+                ("active", "#e2e8f0"),
+                ("disabled", "#f8fafc"),
+            ],
+            foreground=[("disabled", "#94a3b8")],
+        )
+
+        # Compacte knop voor in een card
+        style.configure(
+            "CardAction.TButton", background="#f1f5f9",
+            foreground=COLOR_TEXT_PRIMARY, borderwidth=0, focusthickness=0,
+            padding=(10, 4), font=(FONT_BASE, 9),
+        )
+        style.map(
+            "CardAction.TButton",
+            background=[("active", "#e2e8f0")],
+            foreground=[("disabled", "#94a3b8")],
+        )
+
+        # Spinbox
+        style.configure(
+            "Modern.TSpinbox", fieldbackground="#ffffff",
+            background="#ffffff", foreground=COLOR_TEXT_PRIMARY,
+            bordercolor=COLOR_DIVIDER, arrowsize=12, padding=(6, 4),
+            relief="flat",
+        )
+
+        # Status-bar
+        style.configure(
+            "StatusBar.TFrame", background=COLOR_TOOLBAR_BG,
         )
         style.configure(
-            "Toolbar.TLabel",
-            background="#1f4ed8",
-            foreground="#ffffff",
-            padding=(6, 0),
+            "Status.TLabel", background=COLOR_TOOLBAR_BG,
+            foreground=COLOR_TEXT_SECONDARY, padding=(12, 6),
+            font=(FONT_BASE, 9),
         )
         style.configure(
-            "Toolbar.TSpinbox",
-            fieldbackground="#ffffff",
-            arrowsize=14,
-            padding=2,
+            "StatusMeta.TLabel", background=COLOR_TOOLBAR_BG,
+            foreground=COLOR_TEXT_MUTED, padding=(12, 6),
+            font=(FONT_BASE, 9),
         )
-        style.configure("FileTitle.TLabel", font=("Segoe UI", 11, "bold"))
-        style.configure("Status.TLabel", padding=(8, 4), foreground="#5b6471")
 
     def _build_ui(self) -> None:
-        toolbar = ttk.Frame(self, style="Toolbar.TFrame", padding=(12, 8))
-        toolbar.pack(side=tk.TOP, fill=tk.X)
+        # ---------------- Toolbar ----------------
+        toolbar_wrap = tk.Frame(self, bg=COLOR_TOOLBAR_BG)
+        toolbar_wrap.pack(side=tk.TOP, fill=tk.X)
 
+        toolbar = ttk.Frame(toolbar_wrap, style="Toolbar.TFrame",
+                            padding=(20, 14))
+        toolbar.pack(fill=tk.X)
+
+        # Logo / titel
+        title_box = ttk.Frame(toolbar, style="Toolbar.TFrame")
+        title_box.pack(side=tk.LEFT, padx=(0, 24))
+        ttk.Label(title_box, text="Word Preview",
+                  style="AppTitle.TLabel").pack(anchor="w")
         ttk.Label(
-            toolbar, text="Word Preview", style="Toolbar.TLabel",
-            font=("Segoe UI", 12, "bold"),
-        ).pack(side=tk.LEFT, padx=(0, 16))
+            title_box,
+            text="INCLUDETEXT-helper voor Word-velden",
+            style="Toolbar.TLabel",
+        ).pack(anchor="w")
 
+        # Primaire acties
         self.refresh_btn = ttk.Button(
-            toolbar, text="Vernieuwen", style="Toolbar.TButton",
+            toolbar, text="Vernieuwen", style="Primary.TButton",
             command=lambda: self.refresh(generate_missing=True),
         )
-        self.refresh_btn.pack(side=tk.LEFT, padx=(0, 6))
+        self.refresh_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         self.regen_btn = ttk.Button(
-            toolbar, text="Alles opnieuw genereren", style="Toolbar.TButton",
-            command=self.regenerate_all,
+            toolbar, text="Genereer alles opnieuw",
+            style="Secondary.TButton", command=self.regenerate_all,
         )
-        self.regen_btn.pack(side=tk.LEFT, padx=(0, 12))
+        self.regen_btn.pack(side=tk.LEFT, padx=(0, 16))
 
-        ttk.Label(toolbar, text="Kolommen:", style="Toolbar.TLabel").pack(side=tk.LEFT)
-        self.col_spin = ttk.Spinbox(
-            toolbar,
-            from_=MIN_COLUMNS, to=MAX_COLUMNS, width=4,
-            textvariable=self.columns_var, command=self._on_columns_change,
-            style="Toolbar.TSpinbox",
+        ttk.Separator(toolbar, orient="vertical").pack(
+            side=tk.LEFT, fill=tk.Y, padx=(0, 16),
         )
-        self.col_spin.pack(side=tk.LEFT, padx=(6, 12))
+
+        # Rechtergedeelte: kolomkeuze + map openen
+        right_box = ttk.Frame(toolbar, style="Toolbar.TFrame")
+        right_box.pack(side=tk.RIGHT)
+
+        self.open_dir_btn = ttk.Button(
+            right_box, text="Open word_files-map",
+            style="Secondary.TButton", command=self._open_word_dir,
+        )
+        self.open_dir_btn.pack(side=tk.RIGHT, padx=(16, 0))
+
+        ttk.Label(right_box, text="Kolommen", style="Toolbar.TLabel").pack(
+            side=tk.LEFT, padx=(0, 6),
+        )
+        self.col_spin = ttk.Spinbox(
+            right_box, from_=MIN_COLUMNS, to=MAX_COLUMNS, width=4,
+            textvariable=self.columns_var, command=self._on_columns_change,
+            style="Modern.TSpinbox", justify="center",
+        )
+        self.col_spin.pack(side=tk.LEFT)
         self.col_spin.bind("<FocusOut>", lambda _e: self._on_columns_change())
         self.col_spin.bind("<Return>", lambda _e: self._on_columns_change())
 
-        self.open_dir_btn = ttk.Button(
-            toolbar, text="Open word_files-map", style="Toolbar.TButton",
-            command=self._open_word_dir,
+        # Subtiele scheidingslijn onder de toolbar
+        tk.Frame(self, bg=COLOR_TOOLBAR_BORDER, height=1).pack(
+            side=tk.TOP, fill=tk.X,
         )
-        self.open_dir_btn.pack(side=tk.LEFT)
 
-        # Body: scrollable canvas
-        body = ttk.Frame(self)
+        # ---------------- Body: scrollable canvas ----------------
+        body = tk.Frame(self, bg=COLOR_BG)
         body.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(body, highlightthickness=0, background="#f4f5f7")
-        v_scroll = ttk.Scrollbar(body, orient="vertical", command=self.canvas.yview)
+        self.canvas = tk.Canvas(body, highlightthickness=0, background=COLOR_BG,
+                                bd=0)
+        v_scroll = ttk.Scrollbar(body, orient="vertical",
+                                 command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=v_scroll.set)
 
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         v_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.inner = ttk.Frame(self.canvas, padding=12)
+        self.inner = tk.Frame(self.canvas, bg=COLOR_BG, padx=20, pady=20)
         self._inner_window = self.canvas.create_window(
             (0, 0), window=self.inner, anchor="nw",
         )
@@ -404,14 +531,22 @@ class WordPreviewApp(tk.Tk):
         self.canvas.bind("<Enter>", lambda _e: self._bind_wheel())
         self.canvas.bind("<Leave>", lambda _e: self._unbind_wheel())
 
-        # Footer / status
-        status_bar = ttk.Frame(self)
+        # ---------------- Footer / status bar ----------------
+        tk.Frame(self, bg=COLOR_TOOLBAR_BORDER, height=1).pack(
+            side=tk.BOTTOM, fill=tk.X,
+        )
+        status_bar = ttk.Frame(self, style="StatusBar.TFrame")
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        ttk.Separator(status_bar, orient="horizontal").pack(fill=tk.X)
+
+        self.meta_var = tk.StringVar(value="")
         ttk.Label(
             status_bar, textvariable=self.status_var, style="Status.TLabel",
             anchor="w",
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(
+            status_bar, textvariable=self.meta_var, style="StatusMeta.TLabel",
+            anchor="e",
+        ).pack(side=tk.RIGHT)
 
     # ------------------------------------------------------------------
     # Scrolling helpers
@@ -494,9 +629,10 @@ class WordPreviewApp(tk.Tk):
         )
 
         self._files = word_files
+        self._update_meta()
         if not to_generate:
             self._render_all()
-            removed_msg = f" Opgeruimd: {len(removed)}." if removed else ""
+            removed_msg = f" {len(removed)} verlopen opgeruimd." if removed else ""
             self.status_var.set(
                 f"{len(word_files)} bestand(en) geladen.{removed_msg}"
             )
@@ -504,6 +640,15 @@ class WordPreviewApp(tk.Tk):
 
         self._render_all()  # toon huidige stand alvast
         self._run_generate_in_background(to_generate, label="Genereren")
+
+    def _update_meta(self) -> None:
+        count = len(self._files)
+        if count == 0:
+            self.meta_var.set("")
+        elif count == 1:
+            self.meta_var.set("1 bestand")
+        else:
+            self.meta_var.set(f"{count} bestanden")
 
     def regenerate_all(self) -> None:
         if self._busy:
@@ -561,6 +706,7 @@ class WordPreviewApp(tk.Tk):
                     self._files = _list_word_files()
                     _cleanup_orphan_previews({p.stem for p in self._files})
                     self._render_all()
+                    self._update_meta()
                     self.status_var.set(
                         f"{len(self._files)} bestand(en) klaar."
                     )
@@ -579,18 +725,11 @@ class WordPreviewApp(tk.Tk):
             widget.destroy()
         self._photo_refs.clear()
         self._selectable_cells.clear()
+        self._selected_cell = None
+        self._selected_badge = None
 
         if not self._files:
-            placeholder = ttk.Frame(self.inner, padding=24)
-            placeholder.pack(fill=tk.BOTH, expand=True)
-            ttk.Label(
-                placeholder,
-                text=(
-                    "Geen .docx-bestanden gevonden in de map word_files/.\n"
-                    "Plaats Word-bestanden in die map en klik op Vernieuwen."
-                ),
-                justify="center",
-            ).pack()
+            self._render_empty_state()
             return
 
         cols = max(MIN_COLUMNS, int(self.columns_var.get() or DEFAULT_COLUMNS))
@@ -605,39 +744,75 @@ class WordPreviewApp(tk.Tk):
             self.winfo_width(),
         ]
         canvas_width = max((w for w in candidates if w > 1), default=1200)
-        usable = max(canvas_width - 40, cols * (THUMB_MIN_WIDTH + 12))
-        thumb_width = max(THUMB_MIN_WIDTH, (usable // cols) - 12)
+        # Reserveer ruimte voor binnen-padding van .inner + iets voor de
+        # scrollbar. Daarna delen we door het aantal kolommen.
+        usable = max(canvas_width - 40, cols * (THUMB_MIN_WIDTH + 32))
+        cell_outer = max(THUMB_MIN_WIDTH + 32, usable // cols)
+        thumb_width = cell_outer - 32  # interne padding van card
         thumb_height = int(thumb_width * 1.414)
 
         # Eén grid-container voor alle bestanden samen. Elke .docx krijgt
-        # één cel (eerste pagina als preview + naam + knoppen). Door elke
-        # kolom een vaste minimale breedte te geven en weight=0 te houden
-        # staan de cellen ALTIJD naast elkaar, ongeacht Tk-thema of DPI.
-        grid_container = tk.Frame(self.inner, bg=self["bg"])
-        grid_container.pack(anchor="nw", fill=tk.NONE, expand=False,
-                            padx=4, pady=4)
+        # één kaart. Vaste minsize per kolom + weight=0 zorgt dat de kaarten
+        # ALTIJD naast elkaar staan, ongeacht Tk-thema of DPI.
+        grid_container = tk.Frame(self.inner, bg=COLOR_BG)
+        grid_container.pack(anchor="nw", fill=tk.NONE, expand=False)
 
-        cell_w = thumb_width + 12
         for c in range(cols):
-            grid_container.columnconfigure(c, weight=0, minsize=cell_w)
+            grid_container.columnconfigure(c, weight=0, minsize=cell_outer)
 
         for index, docx in enumerate(self._files):
             row, col = divmod(index, cols)
             card = self._build_file_card(grid_container, docx,
                                          thumb_width, thumb_height)
-            card.grid(row=row, column=col, padx=6, pady=6, sticky="nw")
+            card.grid(row=row, column=col, padx=8, pady=8, sticky="nw")
+
+    def _render_empty_state(self) -> None:
+        placeholder = tk.Frame(self.inner, bg=COLOR_BG, padx=40, pady=40)
+        placeholder.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            placeholder, text="\U0001F4C4",  # 📄
+            bg=COLOR_BG, fg=COLOR_TEXT_MUTED,
+            font=(FONT_BASE, 56),
+        ).pack(pady=(40, 8))
+        tk.Label(
+            placeholder, text="Nog geen Word-bestanden gevonden",
+            bg=COLOR_BG, fg=COLOR_TEXT_PRIMARY,
+            font=(FONT_BASE, 14, "bold"),
+        ).pack()
+        tk.Label(
+            placeholder,
+            text=(
+                "Plaats je .docx-bestanden in de map word_files\\\n"
+                "en klik op 'Vernieuwen' om de previews te genereren."
+            ),
+            bg=COLOR_BG, fg=COLOR_TEXT_SECONDARY,
+            font=(FONT_BASE, 10), justify="center",
+        ).pack(pady=(6, 16))
+        ttk.Button(
+            placeholder, text="Open word_files-map",
+            style="Primary.TButton", command=self._open_word_dir,
+        ).pack()
 
     def _build_file_card(
         self, parent: tk.Misc, docx: Path, thumb_w: int, thumb_h: int,
     ) -> tk.Widget:
-        cell_bg = "#fafbfc"
-        cell = tk.Frame(
-            parent, bg=cell_bg, highlightthickness=3,
-            highlightbackground="#d8dbe0", highlightcolor="#1f4ed8",
+        card_bg = COLOR_CARD_BG
+        # 2px highlight blijft constant zodat de layout niet schuift bij
+        # selectie; alleen de kleur verandert.
+        card = tk.Frame(
+            parent, bg=card_bg, highlightthickness=2,
+            highlightbackground=COLOR_CARD_BORDER,
+            highlightcolor=COLOR_CARD_BORDER_SELECTED,
             cursor="hand2",
         )
 
-        # Thumbnail van de eerste pagina (of placeholder als die ontbreekt)
+        # ---- Thumbnail ----
+        thumb_frame = tk.Frame(
+            card, bg=COLOR_THUMB_FRAME, width=thumb_w, height=thumb_h,
+        )
+        thumb_frame.pack(padx=12, pady=(12, 8))
+        thumb_frame.pack_propagate(False)
+
         previews = _existing_previews(docx)
         thumb_widget: tk.Widget
         if previews:
@@ -647,100 +822,129 @@ class WordPreviewApp(tk.Tk):
                 photo = ImageTk.PhotoImage(img)
                 self._photo_refs.append(photo)
                 thumb_widget = tk.Label(
-                    cell, image=photo, bg=cell_bg, cursor="hand2",
+                    thumb_frame, image=photo, bg=COLOR_THUMB_FRAME,
+                    cursor="hand2", bd=0,
                 )
             except OSError as exc:
                 logger.exception("Kon preview niet laden: %s", previews[0])
                 thumb_widget = tk.Label(
-                    cell, text=f"[fout]\n{exc}",
-                    fg="#b91c1c", bg=cell_bg, width=20, height=10,
+                    thumb_frame, text=f"Fout\n{exc}",
+                    fg="#b91c1c", bg=COLOR_THUMB_FRAME, justify="center",
                 )
         else:
             thumb_widget = tk.Label(
-                cell, text="(nog geen preview)\nklik 'Opnieuw'",
-                fg="#5b6471", bg=cell_bg, justify="center",
-                width=max(16, thumb_w // 9),
-                height=max(10, thumb_h // 20),
+                thumb_frame,
+                text="\u23F3\nNog geen preview\nKlik 'Vernieuwen'",
+                fg=COLOR_TEXT_SECONDARY, bg=COLOR_THUMB_FRAME,
+                justify="center", font=(FONT_BASE, 9),
             )
-        thumb_widget.pack(padx=6, pady=(6, 4))
+        thumb_widget.place(relx=0.5, rely=0.5, anchor="center")
 
+        # ---- Naam ----
         display = self._display_name(docx)
         name_label = tk.Label(
-            cell, text=display, bg=cell_bg, fg="#0e1726",
-            font=("Segoe UI", 10, "bold"), wraplength=thumb_w,
+            card, text=display, bg=card_bg, fg=COLOR_TEXT_PRIMARY,
+            font=(FONT_BASE, 10, "bold"), wraplength=thumb_w,
             justify="center", cursor="hand2",
         )
-        name_label.pack(padx=6, pady=(0, 0))
+        name_label.pack(padx=12, pady=(0, 2))
 
         subtitle: tk.Label | None = None
         if display != docx.stem:
             subtitle = tk.Label(
-                cell, text=docx.name, bg=cell_bg, fg="#5b6471",
-                font=("Segoe UI", 8), wraplength=thumb_w,
+                card, text=docx.name, bg=card_bg, fg=COLOR_TEXT_SECONDARY,
+                font=(FONT_BASE, 8), wraplength=thumb_w,
                 justify="center", cursor="hand2",
             )
-            subtitle.pack(padx=6, pady=(0, 0))
+            subtitle.pack(padx=12, pady=(0, 4))
 
-        buttons = tk.Frame(cell, bg=cell_bg)
-        buttons.pack(padx=4, pady=(6, 8))
+        # ---- Knoppenrij ----
+        actions = tk.Frame(card, bg=card_bg)
+        actions.pack(padx=10, pady=(6, 12))
         ttk.Button(
-            buttons, text="Naam aanpassen",
+            actions, text="Naam", style="CardAction.TButton",
             command=lambda p=docx: self._rename_file(p),
         ).pack(side=tk.LEFT, padx=2)
         ttk.Button(
-            buttons, text="Opnieuw",
+            actions, text="Vernieuwen", style="CardAction.TButton",
             command=lambda p=docx: self._regenerate_one(p),
         ).pack(side=tk.LEFT, padx=2)
 
-        self._selectable_cells.append(cell)
+        # ---- "Op klembord"-badge (alleen zichtbaar op geselecteerde card) ----
+        badge = tk.Label(
+            card, text=" \u2713 Op klembord ", bg=COLOR_BADGE_BG,
+            fg=COLOR_BADGE_FG, font=(FONT_BASE, 8, "bold"),
+            padx=6, pady=2,
+        )
+        # badge nog niet placen — pas tonen na klik
+
+        self._selectable_cells.append(card)
         cmd = _build_include_command(docx)
 
-        def reset_cell_colors(target: tk.Widget, bg: str) -> None:
-            """Pas de achtergrondkleur recursief aan op cell + kinderen,
-            zodat ook de buttons-frame meegaat in de selectie-highlight."""
+        def apply_bg_recursive(target: tk.Widget, bg: str) -> None:
             try:
                 target.configure(bg=bg)
             except tk.TclError:
                 pass
             for child in target.winfo_children():
-                # ttk.Button heeft geen bg-attribute; daar gaan we niet in mee.
                 if isinstance(child, ttk.Widget):
                     continue
-                reset_cell_colors(child, bg)
+                if child is thumb_frame or child is thumb_widget:
+                    # Thumbnail-frame houdt altijd zijn eigen lichte tint.
+                    continue
+                if child is badge:
+                    continue
+                apply_bg_recursive(child, bg)
 
-        def on_click(_event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
-            self._copy_command(cmd, docx, 1)
-            for other in self._selectable_cells:
+        def set_selected(selected: bool) -> None:
+            if selected:
+                card.configure(highlightbackground=COLOR_CARD_BORDER_SELECTED)
+                apply_bg_recursive(card, COLOR_CARD_BG_SELECTED)
+                badge.place(relx=1.0, rely=0.0, x=-10, y=10, anchor="ne")
+                badge.lift()
+            else:
+                card.configure(highlightbackground=COLOR_CARD_BORDER)
+                apply_bg_recursive(card, card_bg)
                 try:
-                    other.configure(highlightbackground="#d8dbe0")
+                    badge.place_forget()
                 except tk.TclError:
                     pass
-                reset_cell_colors(other, cell_bg)
-            # Markeer de aangeklikte cel met een groene rand + lichtgroene
-            # achtergrond zodat helder is welke preview op het klembord staat.
-            cell.configure(highlightbackground="#15803d")
-            reset_cell_colors(cell, "#dcfce7")
 
-        clickable = [cell, thumb_widget, name_label, buttons]
+        def on_click(_event: tk.Event | None = None) -> None:  # type: ignore[type-arg]
+            previous = self._selected_cell
+            if previous is not None and previous is not card:
+                handler = getattr(previous, "_set_selected", None)
+                if callable(handler):
+                    handler(False)
+            set_selected(True)
+            self._selected_cell = card
+            self._selected_badge = badge
+            self._copy_command(cmd, docx)
+
+        # Stash handler op de cell zodat _render_all/andere callbacks hem
+        # netjes kunnen aanroepen.
+        card._set_selected = set_selected  # type: ignore[attr-defined]
+
+        clickable = [card, thumb_frame, thumb_widget, name_label, actions]
         if subtitle is not None:
             clickable.append(subtitle)
         for widget in clickable:
             widget.bind("<Button-1>", on_click)
 
         def on_enter(_e: tk.Event) -> None:  # type: ignore[type-arg]
-            current = str(cell.cget("highlightbackground"))
-            if current != "#15803d":
-                cell.configure(highlightbackground="#1f4ed8")
+            if self._selected_cell is card:
+                return
+            card.configure(highlightbackground=COLOR_CARD_BORDER_HOVER)
 
         def on_leave(_e: tk.Event) -> None:  # type: ignore[type-arg]
-            current = str(cell.cget("highlightbackground"))
-            if current != "#15803d":
-                cell.configure(highlightbackground="#d8dbe0")
+            if self._selected_cell is card:
+                return
+            card.configure(highlightbackground=COLOR_CARD_BORDER)
 
-        cell.bind("<Enter>", on_enter)
-        cell.bind("<Leave>", on_leave)
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
 
-        return cell
+        return card
 
     # ------------------------------------------------------------------
     # Custom names
@@ -783,9 +987,7 @@ class WordPreviewApp(tk.Tk):
         self.clipboard_append(command)
         self.update()  # zorgt dat de waarde echt op het systeem-klembord staat
         display = self._display_name(docx)
-        self.status_var.set(
-            f"INCLUDETEXT gekopieerd voor '{display}'."
-        )
+        self.status_var.set(f"Op klembord: {display}")
         self._show_toast(
             f"\u2713 INCLUDETEXT gekopieerd\n{display}"
         )
@@ -806,10 +1008,10 @@ class WordPreviewApp(tk.Tk):
             toast.attributes("-toolwindow", True)
         except tk.TclError:
             pass
-        toast.configure(bg="#15803d")
+        toast.configure(bg=COLOR_TOAST_BG)
         label = tk.Label(
-            toast, text="", bg="#15803d", fg="#ffffff",
-            font=("Segoe UI", 12, "bold"), padx=24, pady=12, justify="center",
+            toast, text="", bg=COLOR_TOAST_BG, fg=COLOR_TOAST_FG,
+            font=(FONT_BASE, 11, "bold"), padx=28, pady=14, justify="center",
         )
         label.pack()
         self._toast = toast
