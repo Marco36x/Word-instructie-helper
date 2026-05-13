@@ -23,10 +23,12 @@ Staat los van de Word Instructie Helper hoofd-app, maar woont in dezelfde repo.
 3. Kopieer de key (begint met `sk-or-v1-...`).
 
 > OpenRouter biedt gratis modellen aan zoals
-> `meta-llama/llama-3.3-70b-instruct:free`, `deepseek/deepseek-chat-v3.1:free`,
-> `google/gemini-2.0-flash-exp:free` en de router `openrouter/free`.
-> Voor deze gratis modellen worden geen credits afgeschreven, maar er gelden
-> wel rate limits.
+> `openai/gpt-oss-120b:free`, `openai/gpt-oss-20b:free`,
+> `meta-llama/llama-3.3-70b-instruct:free`, `qwen/qwen3-next-80b-a3b-instruct:free`
+> en `z-ai/glm-4.5-air:free`. Voor deze gratis modellen worden geen credits
+> afgeschreven, maar er gelden wel rate limits. De tool valt automatisch terug
+> op een ander gratis model uit de dropdown als het gekozen model op dat
+> moment rate-limited is.
 
 ## Installeren en starten
 
@@ -51,10 +53,10 @@ Opties:
 
 ## Configuratie via `.env`
 
-| Variabele            | Verplicht | Beschrijving                                    |
-|----------------------|-----------|-------------------------------------------------|
-| `OPENROUTER_API_KEY` | Ja        | Je gratis OpenRouter API key.                   |
-| `OPENROUTER_MODEL`   | Nee       | Default-model. Anders: `meta-llama/llama-3.3-70b-instruct:free`. |
+| Variabele            | Verplicht | Beschrijving                                            |
+|----------------------|-----------|---------------------------------------------------------|
+| `OPENROUTER_API_KEY` | Ja        | Je gratis OpenRouter API key.                           |
+| `OPENROUTER_MODEL`   | Nee       | Default-model. Anders: `openai/gpt-oss-120b:free`.      |
 
 ## API
 
@@ -76,9 +78,16 @@ Respons:
 ```json
 {
   "rewritten": "herschreven tekst...",
-  "model": "meta-llama/llama-3.3-70b-instruct:free"
+  "model": "openai/gpt-oss-120b:free",
+  "fallback_used": false,
+  "requested_model": "openai/gpt-oss-120b:free"
 }
 ```
+
+Als het gevraagde model rate-limited is (HTTP 429), valt de server
+automatisch terug op een ander gratis model uit de lijst. In dat geval is
+`fallback_used: true` en bevat `requested_model` het oorspronkelijk
+gevraagde model.
 
 `GET /api/health` geeft aan of er een API key geconfigureerd is.
 
@@ -87,6 +96,7 @@ Respons:
 - **`OPENROUTER_API_KEY ontbreekt`**: maak `text_rewriter/.env` aan met je
   key (zie `.env.example`).
 - **HTTP 429 / rate-limited**: de gratis modellen hebben per dag een limiet.
-  Wacht even of probeer een ander gratis model in de dropdown.
+  De server probeert automatisch andere gratis modellen uit de dropdown
+  voordat hij opgeeft. Als alles rate-limited is, wacht een paar minuten.
 - **HTTP 401**: ongeldige of verlopen API key. Maak een nieuwe key aan op
   <https://openrouter.ai/keys>.

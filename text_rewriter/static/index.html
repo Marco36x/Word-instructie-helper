@@ -341,9 +341,19 @@
           throw new Error(detail);
         }
         outputEl.value = data.rewritten || "";
-        modelInfoEl.textContent = "Model: " + (data.model || "?");
+        let info = "Model: " + (data.model || "?");
+        if (data.fallback_used && data.requested_model
+            && data.requested_model !== data.model) {
+          info += "  (fallback van " + data.requested_model + ")";
+        }
+        modelInfoEl.textContent = info;
         copyBtn.disabled = !outputEl.value;
-        setStatus("Klaar.", "success");
+        setStatus(
+          data.fallback_used
+            ? "Klaar (gekozen model was rate-limited; fallback gebruikt)."
+            : "Klaar.",
+          "success"
+        );
       } catch (err) {
         setStatus("Fout: " + err.message, "error");
       } finally {

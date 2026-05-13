@@ -37,32 +37,39 @@ logger = logging.getLogger("text_rewriter")
 BASE_DIR = Path(__file__).parent.resolve()
 STATIC_DIR = BASE_DIR / "static"
 
-DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
+DEFAULT_MODEL = "openai/gpt-oss-120b:free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# Een korte lijst gratis OpenRouter-modellen die geschikt zijn voor tekst.
-# De gebruiker kan via de UI of OPENROUTER_MODEL elk gewenst model kiezen;
-# deze lijst dient alleen als dropdown-suggestie.
+# Lijst gratis OpenRouter-modellen die geschikt zijn voor tekst.
+# Volgorde = fallback-volgorde: als het gekozen model 429/upstream-rate-limit
+# geeft, probeert de server het volgende model in deze lijst.
+# Modellen die hier staan zijn op het moment van schrijven beschikbaar op
+# https://openrouter.ai/models?free=true. Pas aan als OpenRouter ze offline
+# haalt; de gebruiker kan met OPENROUTER_MODEL altijd eigen modellen forceren.
 FREE_MODEL_CHOICES: list[dict[str, str]] = [
     {
+        "id": "openai/gpt-oss-120b:free",
+        "label": "OpenAI gpt-oss 120B (gratis)",
+    },
+    {
+        "id": "openai/gpt-oss-20b:free",
+        "label": "OpenAI gpt-oss 20B (gratis)",
+    },
+    {
         "id": "meta-llama/llama-3.3-70b-instruct:free",
-        "label": "Llama 3.3 70B Instruct (gratis)",
+        "label": "Meta Llama 3.3 70B Instruct (gratis)",
     },
     {
-        "id": "deepseek/deepseek-chat-v3.1:free",
-        "label": "DeepSeek Chat v3.1 (gratis)",
+        "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+        "label": "Qwen3 Next 80B Instruct (gratis)",
     },
     {
-        "id": "google/gemini-2.0-flash-exp:free",
-        "label": "Gemini 2.0 Flash Experimental (gratis)",
+        "id": "z-ai/glm-4.5-air:free",
+        "label": "Z.ai GLM 4.5 Air (gratis)",
     },
     {
-        "id": "qwen/qwen-2.5-72b-instruct:free",
-        "label": "Qwen 2.5 72B Instruct (gratis)",
-    },
-    {
-        "id": "openrouter/free",
-        "label": "OpenRouter auto (gratis router)",
+        "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+        "label": "Nous Hermes 3 Llama 3.1 405B (gratis)",
     },
 ]
 
@@ -110,6 +117,8 @@ class RewriteRequest(BaseModel):
 class RewriteResponse(BaseModel):
     rewritten: str
     model: str
+    fallback_used: bool = False
+    requested_model: str | None = None
 
 
 app = FastAPI(title="Text Rewriter")
@@ -140,7 +149,9 @@ def rewrite(req: RewriteRequest) -> RewriteResponse:
             ),
         )
 
-    model = (req.model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL).strip()
+    requested_model = (
+        req.model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
+    ).strip()
 
     user_content = req.text.strip()
     if req.instructions and req.instructions.strip():
@@ -151,15 +162,6 @@ def rewrite(req: RewriteRequest) -> RewriteResponse:
     else:
         user_content = f"Tekst om te herschrijven:\n{user_content}"
 
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT_NL},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.2,
-    }
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -168,41 +170,88 @@ def rewrite(req: RewriteRequest) -> RewriteResponse:
         "X-Title": "Word Instructie Helper - Text Rewriter",
     }
 
-    logger.info("Rewrite request: model=%s, chars=%d", model, len(req.text))
+    # Bouw de fallback-keten: eerst het gevraagde model, daarna de overige
+    # gratis modellen uit FREE_MODEL_CHOICES (zonder duplicaten). Veel gratis
+    # OpenRouter-modellen geven HTTP 429 'Provider returned error' wanneer de
+    # upstream rate-limit even op is; door automatisch door te schakelen blijft
+    # de tool bruikbaar zolang er ten minste een gratis model beschikbaar is.
+    fallback_ids = [m["id"] for m in FREE_MODEL_CHOICES if m["id"] != requested_model]
+    model_chain: list[str] = [requested_model, *fallback_ids]
 
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(OPENROUTER_URL, headers=headers, json=payload)
-    except httpx.HTTPError as exc:
-        logger.exception("OpenRouter request failed")
-        raise HTTPException(
-            status_code=502, detail=f"Kon OpenRouter niet bereiken: {exc}"
-        ) from exc
+    last_error: tuple[int, str] | None = None
+    for index, model in enumerate(model_chain):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_NL},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.2,
+        }
 
-    if response.status_code != 200:
-        detail = response.text
-        try:
-            data = response.json()
-            detail = data.get("error", {}).get("message") or detail
-        except ValueError:
-            pass
-        logger.error("OpenRouter error %s: %s", response.status_code, detail)
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=f"OpenRouter-fout: {detail}",
+        logger.info(
+            "Rewrite request (attempt %d/%d): model=%s, chars=%d",
+            index + 1,
+            len(model_chain),
+            model,
+            len(req.text),
         )
 
-    data = response.json()
-    try:
-        rewritten = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        logger.error("Onverwacht OpenRouter-antwoord: %s", data)
-        raise HTTPException(
-            status_code=502,
-            detail="OpenRouter gaf een onverwacht antwoord terug.",
-        ) from exc
+        try:
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(OPENROUTER_URL, headers=headers, json=payload)
+        except httpx.HTTPError as exc:
+            logger.exception("OpenRouter request failed for %s", model)
+            last_error = (502, f"Kon OpenRouter niet bereiken: {exc}")
+            continue
 
-    return RewriteResponse(rewritten=rewritten, model=model)
+        if response.status_code == 200:
+            data = response.json()
+            try:
+                rewritten = data["choices"][0]["message"]["content"].strip()
+            except (KeyError, IndexError, TypeError):
+                logger.error("Onverwacht OpenRouter-antwoord van %s: %s", model, data)
+                last_error = (
+                    502,
+                    "OpenRouter gaf een onverwacht antwoord terug.",
+                )
+                continue
+            if not rewritten:
+                last_error = (502, "OpenRouter gaf een leeg antwoord terug.")
+                continue
+            return RewriteResponse(
+                rewritten=rewritten,
+                model=model,
+                fallback_used=(model != requested_model),
+                requested_model=requested_model,
+            )
+
+        detail = response.text
+        upstream_code: int | None = None
+        try:
+            err_body = response.json()
+            err_obj = err_body.get("error") if isinstance(err_body, dict) else None
+            if isinstance(err_obj, dict):
+                detail = err_obj.get("message") or detail
+                upstream_code = err_obj.get("code")
+        except ValueError:
+            pass
+        logger.warning(
+            "OpenRouter error %s (upstream=%s) for %s: %s",
+            response.status_code,
+            upstream_code,
+            model,
+            detail,
+        )
+        last_error = (response.status_code, f"OpenRouter-fout: {detail}")
+
+        # Alleen doorvallen op rate-limit (429) of model-niet-gevonden (404).
+        # Andere fouten (401 auth, 400 bad request) hoeven we niet te retryen.
+        if response.status_code not in (404, 429) and upstream_code not in (404, 429):
+            break
+
+    status, detail = last_error or (502, "Onbekende OpenRouter-fout.")
+    raise HTTPException(status_code=status, detail=detail)
 
 
 @app.get("/api/health")
