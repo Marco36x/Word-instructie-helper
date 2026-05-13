@@ -6,9 +6,16 @@ Kleine lokale Python-tool om een paar regels tekst te herschrijven naar
 
 Staat los van de Word Instructie Helper hoofd-app, maar woont in dezelfde repo.
 
+De tool heeft **twee modi**, met dezelfde modellen, prompt en fallback-keten:
+
+- **Desktop** (`desktop.py`) — Tkinter-window, geen browser nodig. Aanrader
+  voor dagelijks gebruik op Windows. Later in te pakken tot een losse `.exe`.
+- **Web** (`main.py`) — FastAPI-server op `http://127.0.0.1:8770` met dezelfde
+  UI in de browser. Handig als je 'm vanaf een ander apparaat wilt benaderen.
+
 ## Wat doet het
-- Webformulier waarin je een stuk tekst plakt.
-- Verstuurt de tekst naar een gratis OpenRouter-model met een vaste
+- Je plakt een stuk tekst in het invoerveld.
+- De tool stuurt de tekst naar een gratis OpenRouter-model met een vaste
   Nederlandstalige systeemprompt die om ondubbelzinnige, technische tekst
   vraagt.
 - Toont het resultaat ernaast, met een knop om naar het klembord te kopieren.
@@ -39,7 +46,34 @@ cd text_rewriter
 python3 -m venv .venv
 . .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
+### Desktop (aanrader op Windows)
+
+```bash
+python desktop.py
+```
+
+De API key kun je direct in de UI plakken en met de knop **Opslaan in .env**
+in `text_rewriter/.env` opslaan, zodat hij bij de volgende start automatisch
+geladen wordt. Wil je liever direct met een bestand werken, kopieer dan
+`.env.example` naar `.env` en plak je key erin.
+
+> Tkinter is onderdeel van de standaard Python-installatie op Windows en
+> macOS. Op Linux moet je `python3-tk` los installeren
+> (`sudo apt install python3-tk`).
+
+Later inpakken tot een losse `.exe`:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --noconsole --name "TextRewriter" desktop.py
+# resultaat staat in dist\TextRewriter.exe
+```
+
+### Web
+
+```bash
 cp .env.example .env
 # open .env en plak je OPENROUTER_API_KEY erin
 
