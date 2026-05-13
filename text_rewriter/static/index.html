@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Text Rewriter</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --surface: #ffffff;
+      --border: #d8dbe0;
+      --primary: #1f4ed8;
+      --primary-dark: #1839a6;
+      --success: #15803d;
+      --danger: #b91c1c;
+      --muted: #5b6471;
+      --text: #1f2430;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--primary);
+      color: #fff;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    header .sub {
+      font-size: 12px;
+      opacity: 0.85;
+    }
+
+    main {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      display: flex;
+      flex-direction: column;
+      min-height: 480px;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel .body {
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      flex: 1;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    textarea, input[type="text"], select {
+      width: 100%;
+      font-family: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      resize: vertical;
+    }
+
+    textarea:focus, input:focus, select:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(31, 78, 216, 0.15);
+    }
+
+    textarea.input { flex: 1; min-height: 220px; }
+    textarea.output {
+      flex: 1;
+      min-height: 220px;
+      background: #fafbfc;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .row > * { min-width: 0; }
+
+    .row .grow { flex: 1; }
+
+    button.primary {
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 120ms ease;
+    }
+
+    button.primary:hover { background: var(--primary-dark); }
+    button.primary:disabled { opacity: 0.6; cursor: progress; }
+    button.primary.copied { background: var(--success); }
+
+    button.secondary {
+      background: transparent;
+      color: var(--primary);
+      border: 1px solid var(--primary);
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    button.secondary:hover:not(:disabled) {
+      background: rgba(31, 78, 216, 0.08);
+    }
+    button.secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.secondary.copied {
+      background: var(--success);
+      color: #fff;
+      border-color: var(--success);
+    }
+
+    .status {
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Menlo,
+        Consolas, monospace;
+    }
+
+    .footer-note {
+      max-width: 1280px;
+      margin: 0 auto 24px auto;
+      padding: 0 24px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .footer-note a { color: var(--primary); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Text Rewriter</h1>
+    <span class="sub">Maak ruwe tekst ondubbelzinnig en technisch helder</span>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Invoer</h2>
+      <div class="body">
+        <label for="input">Tekst om te herschrijven</label>
+        <textarea
+          id="input"
+          class="input"
+          placeholder="Plak hier de tekst die je wilt herschrijven..."
+        ></textarea>
+
+        <div class="row">
+          <div class="grow">
+            <label for="model">Model</label>
+            <select id="model"></select>
+          </div>
+        </div>
+
+        <div>
+          <label for="instructions">Extra aanwijzingen (optioneel)</label>
+          <input
+            id="instructions"
+            type="text"
+            placeholder="Bv. 'gebruik de wij-vorm' of 'maak er een stapsgewijze instructie van'"
+          />
+        </div>
+
+        <div class="row">
+          <button id="rewrite" class="primary">Herschrijf tekst</button>
+          <button id="clear" class="secondary" type="button">Wissen</button>
+          <span id="status" class="status"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Resultaat</h2>
+      <div class="body">
+        <label for="output">Herschreven tekst</label>
+        <textarea
+          id="output"
+          class="output"
+          placeholder="De herschreven tekst verschijnt hier..."
+          readonly
+        ></textarea>
+        <div class="row">
+          <button id="copy" class="secondary" type="button" disabled>
+            Kopieer resultaat
+          </button>
+          <span id="model-info" class="meta"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <p class="footer-note">
+    Stel je API key in via <code>text_rewriter/.env</code> (zie
+    <code>.env.example</code>). Gratis keys: <a
+      href="https://openrouter.ai/keys" target="_blank" rel="noopener"
+      >openrouter.ai/keys</a>.
+  </p>
+
+  <script>
+    const inputEl = document.getElementById("input");
+    const outputEl = document.getElementById("output");
+    const modelEl = document.getElementById("model");
+    const instructionsEl = document.getElementById("instructions");
+    const rewriteBtn = document.getElementById("rewrite");
+    const clearBtn = document.getElementById("clear");
+    const copyBtn = document.getElementById("copy");
+    const statusEl = document.getElementById("status");
+    const modelInfoEl = document.getElementById("model-info");
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    async function loadModels() {
+      try {
+        const res = await fetch("/api/models");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        modelEl.innerHTML = "";
+        for (const m of data.models) {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.label;
+          if (m.id === data.default) opt.selected = true;
+          modelEl.appendChild(opt);
+        }
+        // Add the configured default if it isn't already one of the choices.
+        if (data.default && !Array.from(modelEl.options).some(
+          (o) => o.value === data.default
+        )) {
+          const opt = document.createElement("option");
+          opt.value = data.default;
+          opt.textContent = data.default + " (uit .env)";
+          opt.selected = true;
+          modelEl.appendChild(opt);
+        }
+      } catch (err) {
+        setStatus("Kon modellijst niet laden: " + err.message, "error");
+      }
+    }
+
+    async function rewrite() {
+      const text = inputEl.value.trim();
+      if (!text) {
+        setStatus("Voer eerst tekst in.", "error");
+        inputEl.focus();
+        return;
+      }
+      rewriteBtn.disabled = true;
+      copyBtn.disabled = true;
+      outputEl.value = "";
+      modelInfoEl.textContent = "";
+      setStatus("Bezig met herschrijven...");
+      try {
+        const res = await fetch("/api/rewrite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text,
+            model: modelEl.value || null,
+            instructions: instructionsEl.value || null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = data && data.detail
+            ? data.detail
+            : "HTTP " + res.status;
+          throw new Error(detail);
+        }
+        outputEl.value = data.rewritten || "";
+        modelInfoEl.textContent = "Model: " + (data.model || "?");
+        copyBtn.disabled = !outputEl.value;
+        setStatus("Klaar.", "success");
+      } catch (err) {
+        setStatus("Fout: " + err.message, "error");
+      } finally {
+        rewriteBtn.disabled = false;
+      }
+    }
+
+    async function copyOutput() {
+      if (!outputEl.value) return;
+      try {
+        await navigator.clipboard.writeText(outputEl.value);
+        copyBtn.classList.add("copied");
+        copyBtn.textContent = "Gekopieerd!";
+        setTimeout(() => {
+          copyBtn.classList.remove("copied");
+          copyBtn.textContent = "Kopieer resultaat";
+        }, 1500);
+      } catch (err) {
+        // Fallback: select the textarea so the user can copy manually.
+        outputEl.removeAttribute("readonly");
+        outputEl.select();
+        document.execCommand && document.execCommand("copy");
+        outputEl.setAttribute("readonly", "");
+        setStatus("Kopieren via clipboard-API lukte niet; tekst geselecteerd.",
+          "error");
+      }
+    }
+
+    rewriteBtn.addEventListener("click", rewrite);
+    clearBtn.addEventListener("click", () => {
+      inputEl.value = "";
+      outputEl.value = "";
+      instructionsEl.value = "";
+      modelInfoEl.textContent = "";
+      copyBtn.disabled = true;
+      setStatus("");
+      inputEl.focus();
+    });
+    copyBtn.addEventListener("click", copyOutput);
+
+    inputEl.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        rewrite();
+      }
+    });
+
+    loadModels();
+  </script>
+</body>
+</html>
